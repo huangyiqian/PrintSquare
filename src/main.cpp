@@ -18,7 +18,6 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-
 const char *FIRMWARE_VERSION = "firmware-v0.5.14";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
@@ -35,7 +34,10 @@ const char *FIRMWARE_VERSION = "firmware-v0.5.14";
 #define C_PANEL 0x3B6D
 #define C_PANEL2 0x2A6B
 #define C_PANEL3 0x4C10
-#define C_CARD 0x2124 // Dark card surface for dashboard
+#define C_CARD 0x2903 // Cool glass card surface
+#define C_GLASS_BG 0x1881    // Visual near-black blue background
+#define C_GLASS_HI 0x7B4A    // Visual cool highlight edge
+#define C_GLASS_LO 0x1061    // Visual deep shadow edge
 
 #define FRAME_X 4
 #define FRAME_Y 4
@@ -222,6 +224,7 @@ struct RenderCache {
   int clockRemainingMin = -999;
   String clockStatus = "";
   bool clockOnline = true;
+  bool clockSyncDrawn = false;
 };
 
 PrinterState pr;
@@ -254,6 +257,18 @@ String pendingHttpConfigBody;
 bool pendingHttpConfig = false;
 bool printerStatusReceived = false;
 uint8_t appliedBrightness = 0;
+
+constexpr size_t MAX_PENDING_HTTP_CLIENTS = 8;
+constexpr unsigned long HTTP_FIRST_BYTE_TIMEOUT_MS = 1500;
+constexpr uint8_t HTTP_CLIENTS_PER_LOOP = 2;
+
+struct PendingHttpClient {
+  WiFiClient client;
+  unsigned long acceptedAt = 0;
+  bool active = false;
+};
+
+PendingHttpClient pendingHttpClients[MAX_PENDING_HTTP_CLIENTS];
 
 const unsigned long DUAL_NOZZLE_SWITCH_MS = 3000;
 
@@ -1089,6 +1104,8 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F(".header .sub{color:#8e8e93;font-size:14px;margin-top:4px}"));
   client.print( F(".grid{display:grid;grid-template-columns:1fr;gap:16px}@media(min-"
             "width:640px){.grid{grid-template-columns:repeat(2,1fr)}}"));
+  client.print( F(".paired-grid{display:grid;grid-template-columns:1fr;gap:16px;grid-column:1 / -1}"
+            "@media(min-width:640px){.paired-grid{grid-template-columns:repeat(2,1fr)}}"));
   client.print( F(".glass{background:rgba(255,255,255,0.06);-webkit-backdrop-filter:"
             "blur(30px) saturate(190%);backdrop-filter:blur(30px) "
             "saturate(190%);border:1px solid "
@@ -1096,6 +1113,8 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "0 8px 32px 0 rgba(0,0,0,0.37);transition:transform .2s "
             "ease,border-color .2s ease}"));
   client.print( F(".glass:hover{border-color:rgba(255,255,255,0.22)}"));
+  client.print( F(".debug-card{align-self:start;max-height:320px}"
+            ".debug-card pre{max-height:240px;margin-bottom:0}"));
   client.print(
       F(".glass "
         "h2{font-size:16px;font-weight:600;color:#f2f2f7;margin-bottom:14px;"
@@ -1359,7 +1378,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "拖动实时应用背光</p></div></div>"));
 
   // Card 3: Screen Layout
-  client.print( F("<div class=\"glass\"><h2>屏幕布局</h2><div class=\"segmented\">"));
+  client.print( F("<div class=\"glass\" style=\"grid-column:1 / -1\"><h2>屏幕布局</h2><div class=\"segmented\">"));
   String lc = stored.layout;
   client.print( F("<button id=\"lc0\" onclick=\"setLayout('classic')\""));
   if (lc == "classic")
@@ -1375,6 +1394,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F(">时钟</button>"));
   client.print( F("</div></div>"));
 
+  client.print( F("<div class=\"paired-grid\">"));
   // Card 4: Brightness Schedule
   client.print( F(
       "<div class=\"glass\"><h2><span>亮度定时</span><label class=\"switch\">"));
@@ -1421,10 +1441,10 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F("</div></div>"));
 
   // Card 5: Real-time Debug Status
-  client.print( F("<div class=\"glass\" style=\"grid-column:1 / "
-            "-1\"><h2><span>实时调试数据</span>"));
+  client.print( F("<div class=\"glass debug-card\"><h2><span>实时调试数据</span>"));
   client.print( F("<button class=\"btn-action\" onclick=\"toggleJson(this)\">查看 "
             "JSON</button></h2><pre id=\"log\"></pre></div>"));
+  client.print( F("</div>"));
 
   client.print(
       F("</div></div><div id=\"toast\" class=\"toast\"></div>")); // end grid,
@@ -1937,37 +1957,69 @@ void queueHttpConfig(WiFiClient &client, const String &body) {
   sendHttpJson(client, 202, "{\"ok\":true,\"queued\":true}");
 }
 
+void serviceHttpClient(WiFiClient &client);
+
 void handleApiClient() {
   if (!serverStarted)
     return;
 
-  WiFiClient client;
-  // Prioritize servers that already have incoming HTTP data ready
-  if (apiServer.hasClientData()) {
-    client = apiServer.accept();
-  } else if (webServer80.hasClientData()) {
-    client = webServer80.accept();
-  } else if (apiServer.hasClient() || webServer80.hasClient()) {
-    // Client has connected (e.g. mobile phone on Wi-Fi), but first HTTP bytes
-    // are still traversing the wireless link.
-    // Accept the client and give it an adequate window (up to 600ms),
-    // while yielding and feeding watchdog so it never blocks or causes WDT resets.
-    client = apiServer.hasClient() ? apiServer.accept() : webServer80.accept();
-    unsigned long startWait = millis();
-    while (!client.available() && client.connected() && (millis() - startWait < 600)) {
-      delay(2);
-      ESP.wdtFeed();
-      optimistic_yield(1000);
+  unsigned long now = millis();
+  for (auto &pending : pendingHttpClients) {
+    if (!pending.active)
+      continue;
+    if (!pending.client) {
+      pending.active = false;
+    } else if (!pending.client.available() &&
+               now - pending.acceptedAt >= HTTP_FIRST_BYTE_TIMEOUT_MS) {
+      pending.client.abort();
+      pending.active = false;
     }
   }
 
-  if (!client)
-    return;
+  // Keep connections without a first HTTP byte in a small app-owned queue.
+  // They are serviced on later loop passes without blocking the main loop.
+  auto acceptPending = [](WiFiServer &server) {
+    while (server.hasClient()) {
+      int freeSlot = -1;
+      for (size_t i = 0; i < MAX_PENDING_HTTP_CLIENTS; ++i) {
+        if (!pendingHttpClients[i].active) {
+          freeSlot = (int)i;
+          break;
+        }
+      }
+      if (freeSlot < 0)
+        return;
 
-  if (!client.available()) {
-    client.stop(10);
-    return;
+      WiFiClient incoming = server.accept();
+      if (!incoming)
+        return;
+      pendingHttpClients[freeSlot].client = incoming;
+      pendingHttpClients[freeSlot].acceptedAt = millis();
+      pendingHttpClients[freeSlot].active = true;
+    }
+  };
+  acceptPending(apiServer);
+  acceptPending(webServer80);
+
+  uint8_t handled = 0;
+  for (auto &pending : pendingHttpClients) {
+    if (!pending.active || !pending.client.available())
+      continue;
+
+    WiFiClient client = pending.client;
+    pending.client = WiFiClient();
+    pending.active = false;
+    serviceHttpClient(client);
+    if (client.connected())
+      client.stop(20);
+    if (++handled >= HTTP_CLIENTS_PER_LOOP)
+      break;
   }
+}
+
+void serviceHttpClient(WiFiClient &client) {
+  if (!client || !client.available())
+    return;
 
   client.setNoDelay(true);
   client.setTimeout(1000);
@@ -2101,6 +2153,8 @@ void restartEspServer() {
   delay(20);
   apiServer.begin();
   webServer80.begin();
+  apiServer.setNoDelay(true);
+  webServer80.setNoDelay(true);
   if (apiServer.status() != 0) {
     serverStarted = true;
     lastRecordedIp = WiFi.localIP();
@@ -2140,6 +2194,8 @@ void startEspServer() {
   delay(10);
   apiServer.begin();
   webServer80.begin();
+  apiServer.setNoDelay(true);
+  webServer80.setNoDelay(true);
   if (apiServer.status() != 0) {
     serverStarted = true;
     lastRecordedIp = WiFi.localIP();
@@ -3052,11 +3108,11 @@ void drawBold(const String &text, int x, int y) {
 }
 
 void drawTextBox(int x, int y, int w, int h, uint8_t font, uint16_t color,
-                 const String &text, bool bold) {
-  tft.fillRect(x, y, w, h, BG_BLACK);
+                 const String &text, bool bold, uint16_t bg = BG_BLACK) {
+  tft.fillRect(x, y, w, h, bg);
   tft.setTextFont(font);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(color, BG_BLACK);
+  tft.setTextColor(color, bg);
   tft.setTextPadding(0);
   if (bold)
     drawBold(text, x + w / 2, y + h / 2);
@@ -3252,6 +3308,19 @@ String timeText(int minutes) {
   char b[18];
   if (h > 0)
     snprintf(b, sizeof(b), "%dh%02dm", h, m);
+  else
+    snprintf(b, sizeof(b), "%dm", m);
+  return b;
+}
+
+String classicRemainingText(int minutes) {
+  if (minutes < 0)
+    return "--";
+  int h = minutes / 60;
+  int m = minutes % 60;
+  char b[18];
+  if (h > 0)
+    snprintf(b, sizeof(b), "%dh%02d", h, m);
   else
     snprintf(b, sizeof(b), "%dm", m);
   return b;
@@ -3542,14 +3611,58 @@ uint16_t filamentColor(uint32_t argb) {
   return ((b >> 3) << 11) | ((g >> 2) << 5) | (r >> 3);
 }
 
+void drawGlassCard(int x, int y, int w, int h, int radius,
+                   uint16_t bg = C_CARD, uint16_t border = C_GLASS_LO,
+                   uint16_t accent = C_RING) {
+  if (w < 4 || h < 4) return;
+  tft.fillRoundRect(x, y, w, h, radius, bg);
+  tft.drawRoundRect(x, y, w, h, radius, border);
+  int inset = min(radius, min(w / 2, h / 2));
+  tft.drawFastHLine(x + inset, y + 1, w - inset * 2, C_GLASS_HI);
+  tft.drawFastVLine(x + 1, y + inset, h - inset * 2, C_GLASS_HI);
+  tft.drawFastHLine(x + inset, y + h - 2, w - inset * 2, C_GLASS_LO);
+  tft.drawFastVLine(x + w - 2, y + inset, h - inset * 2, C_GLASS_LO);
+  tft.fillRect(x + 3, y + 5, 2, h - 10, accent);
+}
+
+uint16_t mixBgr565(uint16_t from, uint16_t to, int step, int span) {
+  if (span <= 0) return from;
+  if (step <= 0) return from;
+  if (step >= span) return to;
+  uint16_t fb = (from >> 11) & 0x1F;
+  uint16_t fg = (from >> 5) & 0x3F;
+  uint16_t fr = from & 0x1F;
+  uint16_t tb = (to >> 11) & 0x1F;
+  uint16_t tg = (to >> 5) & 0x3F;
+  uint16_t tr = to & 0x1F;
+  uint16_t b = fb + (((tb - fb) * step) / span);
+  uint16_t g = fg + (((tg - fg) * step) / span);
+  uint16_t r = fr + (((tr - fr) * step) / span);
+  return (b << 11) | (g << 5) | r;
+}
+
+void drawGlassProgress(int x, int y, int w, int h, int pct, int radius) {
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  tft.fillRoundRect(x, y, w, h, radius, C_GLASS_BG);
+  tft.drawRoundRect(x, y, w, h, radius, C_GLASS_LO);
+  if (pct <= 0) return;
+  int filled = (pct * w) / 100;
+  if (filled < radius) filled = radius;
+  tft.fillRoundRect(x, y, filled, h, radius, C_RING);
+  for (int i = 0; i < filled; ++i) {
+    uint16_t color = mixBgr565(C_RING, C_CYAN, i, w - 1);
+    tft.drawFastVLine(x + i, y + 2, h - 4, color);
+  }
+}
+
 void drawDashboardSlotCard(int slotX, const AmsTrayInfo &slot, bool isActive,
                            const char *slotLabel, const char *emptyLabel) {
   // Card Background & Highlight Border
   uint16_t bgCol = isActive ? 0x1A04 : C_CARD;
   uint16_t borderCol = isActive ? C_RING : 0x294A;
 
-  tft.fillRoundRect(slotX, 102, 44, 46, 6, bgCol);
-  tft.drawRoundRect(slotX, 102, 44, 46, 6, borderCol);
+  drawGlassCard(slotX, 102, 44, 46, 6, bgCol, borderCol);
 
   if (isActive) {
     // Active indicator triangle at top center of slot card
@@ -3621,25 +3734,20 @@ void drawDashboardBase() {
   tft.drawRoundRect(4, 4, 232, 232, 8, 0x294A);
 
   // 1. Top Header Capsule Bar (y: 10, h: 22, r: 11)
-  tft.fillRoundRect(14, 10, 212, 22, 11, C_CARD);
-  tft.drawRoundRect(14, 10, 212, 22, 11, 0x294A);
+  drawGlassCard(14, 10, 212, 22, 11);
 
   // 2. Middle Progress Hero Card Base (y: 36, h: 118, r: 10)
-  tft.fillRoundRect(14, 36, 212, 118, 10, C_CARD);
-  tft.drawRoundRect(14, 36, 212, 118, 10, 0x294A);
+  drawGlassCard(14, 36, 212, 118, 10);
 
   // Progress Bar Track Base inside Hero Card (y: 86, h: 12, r: 6)
-  tft.fillRoundRect(24, 86, 192, 12, 6, BG_BLACK);
-  tft.drawRoundRect(24, 86, 192, 12, 6, 0x294A);
+  drawGlassProgress(24, 86, 192, 12, 0, 6);
 
   // 3. Bottom Metric Cards Base (y: 160, h: 68, r: 8)
   // Left Temp Card
-  tft.fillRoundRect(14, 160, 102, 68, 8, C_CARD);
-  tft.drawRoundRect(14, 160, 102, 68, 8, 0x294A);
+  drawGlassCard(14, 160, 102, 68, 8);
 
   // Right Time Card
-  tft.fillRoundRect(124, 160, 102, 68, 8, C_CARD);
-  tft.drawRoundRect(124, 160, 102, 68, 8, 0x294A);
+  drawGlassCard(124, 160, 102, 68, 8);
 
   cache.progressPct = -999;
   cache.nozzleTemp = -999;
@@ -3670,8 +3778,7 @@ void drawDashboardFields() {
   String model = getTopLeftDisplayName();
   String st = dashboardStatusText();
   if (model != cache.model || st != cache.status) {
-    tft.fillRoundRect(14, 10, 212, 22, 11, C_CARD);
-    tft.drawRoundRect(14, 10, 212, 22, 11, 0x294A);
+    drawGlassCard(14, 10, 212, 22, 11);
 
     // Left: Model
     tft.setTextDatum(TL_DATUM);
@@ -3703,6 +3810,7 @@ void drawDashboardFields() {
   if (heroDirty) {
     // Clear Hero Card top text section
     tft.fillRect(16, 38, 208, 46, C_CARD);
+    tft.fillRect(17, 41, 2, 43, C_RING);
 
     // Large Percentage Text on Left
     tft.setTextDatum(TL_DATUM);
@@ -3769,21 +3877,7 @@ void drawDashboardFields() {
     tft.drawString(spdStr, 216, 58);
 
     // Progress Bar Track with Glow Head (y: 86, h: 12)
-    tft.fillRoundRect(24, 86, 192, 12, 6, BG_BLACK);
-    tft.drawRoundRect(24, 86, 192, 12, 6, 0x294A);
-
-    if (progressValue > 0) {
-      int barW = (progressValue * 192) / 100;
-      if (barW > 0) {
-        if (barW < 12)
-          barW = 12;
-        tft.fillRoundRect(24, 86, barW, 12, 6, C_RING);
-        // Light trail glowing tip
-        if (barW > 5) {
-          tft.fillRoundRect(24 + barW - 5, 86, 5, 12, 2, C_TEXT);
-        }
-      }
-    }
+    drawGlassProgress(24, 86, 192, 12, progressValue, 6);
 
     cache.progressPct = progressValue;
     cache.currentLayer = pr.currentLayer;
@@ -3859,8 +3953,7 @@ void drawDashboardFields() {
 
   if (nozzleV != cache.nozzleTemp || bedV != cache.bedTemp ||
       chamberV != cache.chamberTemp || nozzleSide != cache.nozzleSide) {
-    tft.fillRoundRect(14, 160, 102, 68, 8, C_CARD);
-    tft.drawRoundRect(14, 160, 102, 68, 8, 0x294A);
+    drawGlassCard(14, 160, 102, 68, 8);
 
     tft.setTextDatum(TL_DATUM);
     tft.setTextFont(2);
@@ -3912,8 +4005,7 @@ void drawDashboardFields() {
   // 4. Bottom Right Card: Remaining Time & ETA (y: 160, h: 68)
   if (pr.remainingMin != cache.dashTimeRemaining ||
       pr.status != cache.dashStatus) {
-    tft.fillRoundRect(124, 160, 102, 68, 8, C_CARD);
-    tft.drawRoundRect(124, 160, 102, 68, 8, 0x294A);
+    drawGlassCard(124, 160, 102, 68, 8);
 
     // Header Label
     tft.setTextDatum(MC_DATUM);
@@ -4055,7 +4147,7 @@ void updateFields() {
 }
 
 void drawClockScreen() {
-  bool fullRedraw = (cache.layout != "clock");
+  bool fullRedraw = (cache.layout != "clock") || cache.clockSyncDrawn;
   if (fullRedraw) {
     cache.hour = -1;
     cache.min = -1;
@@ -4066,6 +4158,7 @@ void drawClockScreen() {
     cache.clockRemainingMin = -999;
     cache.clockStatus = "";
     cache.clockOnline = !pr.online;
+    cache.clockSyncDrawn = false;
     tft.fillScreen(BG_BLACK);
     tft.drawRoundRect(4, 4, 232, 232, 8, 0x294A);
   }
@@ -4073,12 +4166,15 @@ void drawClockScreen() {
   struct tm *info = localtime(&now);
 
   if (!info || now < 1700000000) {
+    if (!cache.clockSyncDrawn) {
     tft.fillScreen(BG_BLACK);
     tft.drawRoundRect(4, 4, 232, 232, 8, 0x294A);
     tft.setTextFont(4);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(C_DIM, BG_BLACK);
     tft.drawString("SYNC...", 120, 120);
+      cache.clockSyncDrawn = true;
+    }
     cache.hour = -1;
     cache.min = -1;
     cache.sec = -1;
@@ -4098,8 +4194,7 @@ void drawClockScreen() {
   // changes)
   if (fullRedraw || h != cache.hour || m != cache.min) {
     // Top Header Bar
-    tft.fillRoundRect(14, 12, 108, 22, 11, C_CARD);
-    tft.drawRoundRect(14, 12, 108, 22, 11, 0x294A);
+    drawGlassCard(14, 12, 108, 22, 11);
     char dateStr[16];
     snprintf(dateStr, sizeof(dateStr), "%04d.%02d.%02d", y, mo, d);
     tft.setTextFont(2);
@@ -4108,8 +4203,7 @@ void drawClockScreen() {
     tft.drawString(dateStr, 68, 23);
 
     const char *weekdays[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-    tft.fillRoundRect(128, 12, 64, 22, 11, C_CARD);
-    tft.drawRoundRect(128, 12, 64, 22, 11, 0x294A);
+    drawGlassCard(128, 12, 64, 22, 11);
     tft.setTextColor(0xFF40, C_CARD);
     tft.drawString(weekdays[wd], 160, 23);
 
@@ -4119,8 +4213,7 @@ void drawClockScreen() {
     tft.drawCircle(208, 23, 5, BG_BLACK);
 
     // Main Clock Card Base
-    tft.fillRoundRect(14, 42, 212, 108, 10, C_CARD);
-    tft.drawRoundRect(14, 42, 212, 108, 10, 0x294A);
+    drawGlassCard(14, 42, 212, 108, 10);
 
     // Draw time string HH MM
     char timeStr[8];
@@ -4193,8 +4286,7 @@ void drawClockScreen() {
       (pr.remainingMin != cache.clockRemainingMin);
 
   if (bottomDirty) {
-    tft.fillRoundRect(14, 158, 212, 68, 8, C_CARD);
-    tft.drawRoundRect(14, 158, 212, 68, 8, 0x294A);
+    drawGlassCard(14, 158, 212, 68, 8);
 
     if (hasActivePrint) {
       // Active Print layout: Model & Status Pill, Progress bar, Temps/ETA
@@ -4211,11 +4303,7 @@ void drawClockScreen() {
       tft.drawString(stStr, 204, 166);
 
       // Progress Bar
-      tft.fillRoundRect(24, 186, 180, 6, 3, BG_BLACK);
-      if (pct > 0) {
-        int pW = (pct * 180) / 100;
-        tft.fillRoundRect(24, 186, pW, 6, 3, C_RING);
-      }
+      drawGlassProgress(24, 186, 180, 6, pct, 3);
 
       // Temps & ETA / Remaining Time
       tft.setTextDatum(TL_DATUM);
@@ -4277,6 +4365,326 @@ void drawClockScreen() {
 
   cache.layout = "clock";
 }
+void drawUiPanel(int x, int y, int w, int h, uint16_t bg = C_CARD) {
+  drawGlassCard(x, y, w, h, 8, bg);
+}
+
+String compactSpeedLabel() {
+  if (pr.spdLvl == 1) {
+    return String("SIL ") + (pr.spdMag > 0 ? String(pr.spdMag) : String("50")) + "%";
+  }
+  if (pr.spdLvl == 2) {
+    return String("STD ") + (pr.spdMag > 0 ? String(pr.spdMag) : String("100")) + "%";
+  }
+  if (pr.spdLvl == 3) {
+    return String("SPT ") + (pr.spdMag > 0 ? String(pr.spdMag) : String("124")) + "%";
+  }
+  if (pr.spdLvl == 4) {
+    return String("LUD ") + (pr.spdMag > 0 ? String(pr.spdMag) : String("166")) + "%";
+  }
+  return "SPD --";
+}
+
+void drawClassicHeaderSafe(const String &model, const String &status) {
+  drawUiPanel(16, 16, 208, 26);
+  String modelText = fitTextToWidth(model.length() ? model : "--", 2, 100, false);
+  String statusTextValue = status;
+  statusTextValue.toUpperCase();
+  statusTextValue = fitTextToWidth(statusTextValue, 2, 58, false);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(modelText, 24, 20);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(statusColor(), C_CARD);
+  tft.drawString(statusTextValue, 194, 20);
+  tft.fillCircle(207, 29, 4, isPrinterOnline() ? statusColor() : C_ORANGE);
+}
+
+void drawClassicHeroSafe(int progressValue) {
+  drawUiPanel(16, 48, 208, 56);
+  String numberText = progressValue >= 0 ? String(progressValue) : String("--");
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(7);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(numberText, 24, 51);
+  int numberWidth = tft.textWidth(numberText);
+  tft.setTextFont(4);
+  tft.setTextColor(C_RING, C_CARD);
+  tft.drawString("%", 27 + numberWidth, 76);
+
+  String layerText = "L --";
+  if (pr.currentLayer >= 0 && pr.totalLayers > 0) {
+    layerText = String("L ") + pr.currentLayer + "/" + pr.totalLayers;
+  } else if (pr.currentLayer >= 0) {
+    layerText = String("L ") + pr.currentLayer;
+  }
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(C_CYAN, C_CARD);
+  tft.drawString(fitTextToWidth(layerText, 2, 92, false), 216, 53);
+  tft.setTextFont(1);
+  tft.setTextColor(pr.spdLvl == 3 ? C_ORANGE : C_DIM, C_CARD);
+  tft.drawString(fitTextToWidth(compactSpeedLabel(), 1, 60, false), 216, 84);
+}
+
+void drawClassicLabelsSafe() {
+  tft.fillRect(20, 116, 90, 15, C_CARD);
+  tft.fillRect(130, 116, 90, 15, C_CARD);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(1);
+  tft.setTextColor(C_DIM, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString("NOZZLE", 65, 123);
+  tft.drawString("BED", 175, 123);
+}
+
+void drawClassicTempValueSafe(int x, int value, uint16_t color, bool dual, int side) {
+  String valueText = value < 0 ? String("--") : String(value);
+  if (dual && side >= 0) {
+    valueText = String(side == 1 ? "R " : "L ") + valueText;
+  }
+  valueText += "C";
+  drawTextBox(x, 133, 90, 23, 4, color, fitTextToWidth(valueText, 4, 84, true), true, C_CARD);
+}
+
+void drawClassicFooterSafe(const String &label, const String &value, bool largeValue) {
+  drawUiPanel(16, 168, 208, 52);
+  tft.drawBitmap(22, 178, BAMBU_LOGO, BAMBU_LOGO_W, BAMBU_LOGO_H, C_RING);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(1);
+  tft.setTextColor(C_DIM, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(label, 56, 177);
+  if (largeValue) {
+    uint8_t valueFont = 4;
+    tft.setTextFont(valueFont);
+    if (tft.textWidth(value) + 1 > 78)
+      valueFont = 2;
+    drawTextBox(132, 176, 84, 34, valueFont, C_CYAN,
+                fitTextToWidth(value, valueFont, 78, true), true, C_CARD);
+  } else {
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextFont(2);
+    tft.setTextColor(C_CYAN, C_CARD);
+    tft.drawString(fitTextToWidth(value, 2, 154, false), 56, 193);
+  }
+}
+
+void drawClassicBaseSafe() {
+  tft.fillScreen(BG_BLACK);
+  drawFrameTrack();
+  drawUiPanel(16, 16, 208, 26);
+  drawUiPanel(16, 48, 208, 56);
+  drawGlassCard(16, 112, 98, 48, 8, C_CARD, C_GLASS_LO, C_CARD);
+  drawGlassCard(126, 112, 98, 48, 8, C_CARD, C_GLASS_LO, C_CARD);
+  drawUiPanel(16, 168, 208, 52);
+  drawClassicLabelsSafe();
+  drawClassicFooterSafe("PRINTER", "--", false);
+
+  cache.progress = -999;
+  cache.progressPct = -999;
+  cache.nozzleTemp = -999;
+  cache.nozzleSide = -2;
+  cache.bedTemp = -999;
+  cache.remainingMin = -999;
+  cache.currentLayer = -999;
+  cache.totalLayers = -999;
+  cache.status = "";
+  cache.displayName = "";
+  cache.layout = "classic";
+  cache.baseDrawn = true;
+  cache.offlineDrawn = false;
+}
+
+void updateClassicFieldsSafe() {
+  String currentStatus = statusText();
+  bool statusChanged = currentStatus != cache.status;
+  String model = getTopLeftDisplayName();
+  if (model != cache.model || statusChanged) {
+    drawClassicHeaderSafe(model, currentStatus);
+    cache.model = model;
+    cache.status = currentStatus;
+  }
+
+  int progressValue = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : -1;
+  if (progressToLen(pr.progress) != cache.progress) {
+    drawFrameTrack();
+    drawFrameProgressLen(progressToLen(pr.progress), C_RING);
+    cache.progress = progressToLen(pr.progress);
+  }
+  bool heroDirty = progressValue != cache.progressPct ||
+                   pr.currentLayer != cache.currentLayer ||
+                   pr.totalLayers != cache.totalLayers ||
+                   pr.spdLvl != cache.spdLvl || pr.spdMag != cache.spdMag;
+  if (heroDirty) {
+    drawClassicHeroSafe(progressValue);
+    cache.progressPct = progressValue;
+    cache.currentLayer = pr.currentLayer;
+    cache.totalLayers = pr.totalLayers;
+    cache.spdLvl = pr.spdLvl;
+    cache.spdMag = pr.spdMag;
+  }
+
+  int side = displayedNozzleSide();
+  int nozzle = displayedNozzleTemp() >= 0 ? (int)(displayedNozzleTemp() + 0.5f) : -1;
+  int bed = pr.bedTemp >= 0 ? (int)(pr.bedTemp + 0.5f) : -1;
+  if (nozzle != cache.nozzleTemp || side != cache.nozzleSide) {
+    drawClassicTempValueSafe(20, nozzle, nozzle >= 0 ? C_YELLOW : C_DIM, side >= 0, side);
+    cache.nozzleTemp = nozzle;
+    cache.nozzleSide = side;
+  }
+  if (bed != cache.bedTemp) {
+    drawClassicTempValueSafe(130, bed, bed >= 0 ? C_ORANGE : C_DIM, false, -1);
+    cache.bedTemp = bed;
+  }
+
+  bool showRemaining = pr.remainingMin > 0 && pr.progress < 100 &&
+                       !isFinishedState(pr.status) && !isFailedState(pr.status);
+  bool footerDirty = pr.remainingMin != cache.remainingMin ||
+                     pr.displayName != cache.displayName || statusChanged;
+  if (footerDirty) {
+    if (showRemaining) {
+      drawClassicFooterSafe("REMAIN", classicRemainingText(pr.remainingMin),
+                            true);
+    } else {
+      const String &label = stored.name.length() ? stored.name : pr.displayName;
+      drawClassicFooterSafe("PRINTER", label.length() ? label : model, false);
+    }
+    cache.remainingMin = pr.remainingMin;
+    cache.displayName = pr.displayName;
+  }
+}
+
+void drawDashboardHeaderSafe() {
+  drawUiPanel(14, 10, 212, 22, C_CARD);
+  String model = getTopLeftDisplayName();
+  String status = dashboardStatusText();
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(fitTextToWidth(model.length() ? model : "--", 2, 105, false), 24, 13);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(statusColor(), C_CARD);
+  tft.drawString(fitTextToWidth(status, 2, 58, false), 196, 13);
+  tft.fillCircle(206, 21, 4, isPrinterOnline() ? statusColor() : C_ORANGE);
+}
+
+void drawDashboardHeroSafe() {
+  tft.fillRect(16, 38, 208, 46, C_CARD);
+  tft.fillRect(17, 41, 2, 43, C_RING);
+  tft.drawFastHLine(24, 82, 192, C_RING);
+  int progressValue = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : -1;
+  String numberText = progressValue >= 0 ? String(progressValue) : String("--");
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(7);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(numberText, 24, 37);
+  int numberWidth = tft.textWidth(numberText);
+  tft.setTextFont(4);
+  tft.setTextColor(C_RING, C_CARD);
+  tft.drawString("%", 27 + numberWidth, 59);
+
+  String layerText = "L --";
+  if (pr.currentLayer >= 0 && pr.totalLayers > 0)
+    layerText = String("L ") + pr.currentLayer + "/" + pr.totalLayers;
+  else if (pr.currentLayer >= 0)
+    layerText = String("L ") + pr.currentLayer;
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(C_CYAN, C_CARD);
+  tft.drawString(fitTextToWidth(layerText, 2, 90, false), 216, 40);
+  tft.setTextFont(1);
+  tft.setTextColor(pr.spdLvl == 3 ? C_ORANGE : C_DIM, C_CARD);
+  tft.drawString(fitTextToWidth(compactSpeedLabel(), 1, 60, false), 216, 66);
+}
+
+void drawDashboardFieldsSafe() {
+  String headerModel = getTopLeftDisplayName();
+  String headerStatus = dashboardStatusText();
+  bool headerDirty = headerModel != cache.model || headerStatus != cache.status;
+  int progressValue = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : -1;
+  bool heroDirty = progressValue != cache.progressPct ||
+                   pr.currentLayer != cache.currentLayer ||
+                   pr.totalLayers != cache.totalLayers ||
+                   pr.spdLvl != cache.spdLvl || pr.spdMag != cache.spdMag;
+  drawDashboardFields();
+  if (headerDirty) drawDashboardHeaderSafe();
+  if (heroDirty) drawDashboardHeroSafe();
+}
+
+void drawClockStatusSafe() {
+  drawUiPanel(14, 158, 212, 68, C_CARD);
+  bool active = pr.online && (isPrintingState(pr.status) ||
+                isPreparingState(pr.status) || isPausedState(pr.status));
+  if (active) {
+    String model = normalizedModelName(pr.model.length() ? pr.model : stored.model);
+    String status = dashboardStatusText();
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextFont(2);
+    tft.setTextColor(C_TEXT, C_CARD);
+    tft.setTextPadding(0);
+    tft.drawString(fitTextToWidth(model.length() ? model : "PRINT", 2, 105, false), 24, 166);
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(statusColor(), C_CARD);
+    tft.drawString(fitTextToWidth(status, 2, 58, false), 204, 166);
+    int pct = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : 0;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    drawGlassProgress(24, 186, 180, 6, pct, 3);
+    int noz = pr.nozzleTemp >= 0 ? (int)(pr.nozzleTemp + 0.5f) : -1;
+    int bed = pr.bedTemp >= 0 ? (int)(pr.bedTemp + 0.5f) : -1;
+    char info[40];
+    snprintf(info, sizeof(info), "NOZ %dC  BED %dC", noz >= 0 ? noz : 0, bed >= 0 ? bed : 0);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextFont(1);
+    tft.setTextColor(C_DIM, C_CARD);
+    tft.drawString(fitTextToWidth(info, 1, 108, false), 24, 198);
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextFont(2);
+    tft.setTextColor(C_CYAN, C_CARD);
+    tft.drawString(fitTextToWidth(timeText(pr.remainingMin), 2, 56, false), 204, 198);
+    return;
+  }
+
+  tft.drawBitmap(24, 176, BAMBU_LOGO, BAMBU_LOGO_W, BAMBU_LOGO_H, C_RING);
+  String model = normalizedModelName(pr.model.length() ? pr.model : stored.model);
+  String name = stored.name.length() ? stored.name : (pr.displayName.length() ? pr.displayName : model);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.setTextPadding(0);
+  tft.drawString(fitTextToWidth(name.length() ? name : "Printer", 2, 90, false), 56, 174);
+  tft.setTextFont(1);
+  tft.setTextColor(C_DIM, C_CARD);
+  tft.drawString(fitTextToWidth(model.length() ? model : "Bambu Lab", 1, 112, false), 56, 196);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(pr.online ? C_CYAN : C_ORANGE, C_CARD);
+  tft.drawString(pr.online ? "READY" : "OFFLINE", 204, 184);
+}
+
+void drawClockScreenSafe() {
+  bool statusDirty = cache.layout != "clock" || cache.clockSyncDrawn;
+  int pct = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : 0;
+  int nozV = pr.nozzleTemp >= 0 ? (int)(pr.nozzleTemp + 0.5f) : -1;
+  int bedV = pr.bedTemp >= 0 ? (int)(pr.bedTemp + 0.5f) : -1;
+  String statusTextValue = dashboardStatusText();
+  statusDirty = statusDirty || pr.online != cache.clockOnline ||
+                statusTextValue != cache.clockStatus ||
+                pct != cache.clockProgressPct ||
+                nozV != cache.clockNozzleTemp ||
+                bedV != cache.clockBedTemp ||
+                pr.remainingMin != cache.clockRemainingMin;
+  drawClockScreen();
+  time_t now = time(nullptr);
+  if (statusDirty && now >= 1700000000 && localtime(&now))
+    drawClockStatusSafe();
+}
 void renderOffline() {
   if (cache.offlineDrawn)
     return;
@@ -4305,31 +4713,31 @@ void renderDisplay() {
                     isPausedState(pr.status));
 
   if (stored.layout == "clock") {
-    drawClockScreen();
+    drawClockScreenSafe();
     cache.baseDrawn = false;
     cache.offlineDrawn = false;
   } else if (hasActivePrint) {
     if (stored.layout == "dashboard") {
       if (!cache.baseDrawn || cache.offlineDrawn || cache.layout != "dashboard")
         drawDashboardBase();
-      drawDashboardFields();
+      drawDashboardFieldsSafe();
     } else {
       if (!cache.baseDrawn || cache.offlineDrawn || cache.layout != "classic")
-        drawBase();
-      updateFields();
+        drawClassicBaseSafe();
+      updateClassicFieldsSafe();
     }
   } else {
     // Respect user layout choice when idle
     if (stored.layout == "dashboard") {
       if (!cache.baseDrawn || cache.offlineDrawn || cache.layout != "dashboard")
         drawDashboardBase();
-      drawDashboardFields();
+      drawDashboardFieldsSafe();
     } else if (stored.layout == "classic") {
       if (!cache.baseDrawn || cache.offlineDrawn || cache.layout != "classic")
-        drawBase();
-      updateFields();
+        drawClassicBaseSafe();
+      updateClassicFieldsSafe();
     } else {
-      drawClockScreen();
+      drawClockScreenSafe();
       cache.baseDrawn = false;
       cache.offlineDrawn = false;
     }
@@ -4488,12 +4896,9 @@ void loop() {
     displayDirty = true;
   }
 
-  bool noActivePrint =
-      !pr.online || !(isPrintingState(pr.status) ||
-                      isPreparingState(pr.status) || isPausedState(pr.status));
   bool isClockMode = stored.layout == "clock";
 
-  if ((noActivePrint || isClockMode) && now - lastDisplay >= 1000) {
+  if (isClockMode && now - lastDisplay >= 1000) {
     displayDirty = true;
   }
 
