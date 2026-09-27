@@ -5,13 +5,15 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.4.71-ui-clean";
+const BACKEND_VERSION = "backend-v0.5.20";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
     changes: [
-      "整理后端配置页布局：基础配置、屏幕设置、高级 HTTP 兜底和操作按钮分组展示",
-      "只调整页面结构和样式，不改云登录、串口写入、WiFi 配置、打印机同步和固件逻辑"
+      "统一项目版本为 v0.5.20，并同步固件、网页后台和文档版本标识",
+      "网页后台设置区重新排版：屏幕布局通栏显示，亮度定时与实时调试数据同排，调试 JSON 限高滚动",
+      "ESP HTTP 客户端改为非阻塞队列分批处理，避免网页请求阻塞 MQTT、屏幕刷新和主循环",
+      "240x240 TFT 界面升级液态玻璃视觉，进度条改为平滑渐变，并移除灯珠控制依赖"
     ]
   },
   {

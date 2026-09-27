@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.14-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.4.71--ui--clean-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.20-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 This project is an enhanced and improved fork of the original [PrintSphere Lite](https://github.com/ccord34/printsphere-lite). Powered by ESP8266EX and a 240x240 ST7789 display, it serves as a mini desktop monitor for real-time printing status and AMS filament tracking for Bambu Lab 3D printers.
@@ -65,6 +65,13 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 * **Fix Top-Right "OFFLINE" Display When Telemetry Updates**: Overhauled `isPrinterOnline()` status evaluation; accurately displays `PRINT` / `PREP` / `PAUSE` / `DONE` / `ERR` / `IDLE` when valid telemetry arrives, only reverting to `OFFLINE` when disconnected or when the printer is genuinely offline.
 * **Preserve Screen Telemetry Across Reconnects**: Reconnecting to the same printer preserves last-known metrics rather than clearing everything to `--`; accurately shows `OFFLINE` status and orange indicators during disconnection.
 
+### 9. 🧭 v0.5.20 Stable Consolidation & Version Alignment
+* **Web admin grid alignment**: The screen-layout card now spans the full width after removal of the status-light card; brightness scheduling and live debug data share one row, while the debug JSON card has a bounded height and scrolls.
+* **Non-blocking HTTP connections**: Added a pending queue for up to 8 connections awaiting their first byte, serviced in small batches by the main loop with timeout cleanup, preventing web requests from blocking MQTT, display refreshes, or the watchdog.
+* **TFT glass visual refresh**: Dashboard, clock, and information cards now use glass surfaces with highlight edges and shadows, while the progress bar uses a smooth gradient on the 240×240 display.
+* **Classic layout refinement**: Remaining time uses the more compact `XhYY` / `XXm` format to reduce overflow and overlap.
+* **Version alignment**: Firmware, backend tooling, and both README documents now use `v0.5.20`, retaining the stable no-LED configuration.
+
 ---
 
 ## 🖼️ Interface & Hardware Previews
@@ -82,8 +89,8 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 ## 🏷️ Version Information
 
-* **Firmware Version**: `v0.5.14`
-* **Backend WebUI**: `v0.4.71-ui-clean`
+* **Firmware Version**: `v0.5.20`
+* **Backend WebUI**: `v0.5.20`
 
 ---
 
