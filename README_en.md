@@ -2,7 +2,7 @@
 
 # PrintSphere Lite Plus (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.14-brightgreen)
+![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
 ![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.4.71--ui--clean-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
@@ -65,6 +65,13 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 * **Fix Top-Right "OFFLINE" Display When Telemetry Updates**: Overhauled `isPrinterOnline()` status evaluation; accurately displays `PRINT` / `PREP` / `PAUSE` / `DONE` / `ERR` / `IDLE` when valid telemetry arrives, only reverting to `OFFLINE` when disconnected or when the printer is genuinely offline.
 * **Preserve Screen Telemetry Across Reconnects**: Reconnecting to the same printer preserves last-known metrics rather than clearing everything to `--`; accurately shows `OFFLINE` status and orange indicators during disconnection.
 
+### 9. ✨ Web Layout Alignment, Asynchronous HTTP Queue & Glassmorphism UI Polish (v0.5.20)
+* **WebUI Responsive Grid Alignment**: Overhauled the built-in web management console layout. Screen layout selection is upgraded to an expansive full-width card; Brightness Scheduling and Real-time Debug cards are symmetrically arranged side-by-side (`.paired-grid`) on PC screens, and debug logs feature auto-constrained height to deliver balanced proportions across mobile and desktop browsers.
+* **Asynchronous Ready-Queue HTTP Service & Anti-Hang Protection**: Introduced `PendingHttpClient` asynchronous queue buffer with concurrent connection threshold (`MAX_PENDING_HTTP_CLIENTS = 8`), guarded by a 1500ms first-byte timeout window and scheduled per-loop batch processing (`HTTP_CLIENTS_PER_LOOP`). Enabled socket-level `setNoDelay(true)` to eliminate microcontroller loop hangs caused by burst browser pre-connections.
+* **Micro-Tactile Glassmorphism Display UI Upgrade**: Introduced `drawGlassCard()` edge rendering with layered specular highlights and drop shadows (`C_GLASS_HI` highlight & `C_GLASS_LO` shadow edges), smooth two-tone progress indicators (`drawGlassProgress()`), and luminous accent accents. Compact speed indicators (`SIL 50%` / `STD 100%` / `SPT 124%` / `LUD 166%`) provide clearer layer and printing status.
+* **Flicker-Free Safe Differential Redraw (Safe Redraw)**: Refactored `drawClassicBaseSafe`, `drawDashboardFieldsSafe`, and `drawClockScreenSafe` with comprehensive dirty-state caching, updating only modified bounding boxes to completely eliminate full-screen tearing, flickering, and ghosting.
+* **Clock Standby & NTP Sync Refresh Scheduling**: Refined NTP synchronization checks in clock layout (graceful `SYNC...` state preventing redundant re-renders), decoupling idle frame updates to a single precise 1-second cadence to reduce background MCU load.
+
 ---
 
 ## 🖼️ Interface & Hardware Previews
@@ -82,7 +89,7 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 ## 🏷️ Version Information
 
-* **Firmware Version**: `v0.5.14`
+* **Firmware Version**: `v0.5.20`
 * **Backend WebUI**: `v0.4.71-ui-clean`
 
 ---

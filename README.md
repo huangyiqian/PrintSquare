@@ -2,7 +2,7 @@
 
 # PrintSphere Lite Plus (Fork 版本)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.14-brightgreen)
+![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
 ![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.4.71--ui--clean-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
@@ -65,6 +65,13 @@
 * **彻底修复「有数据更新右上角仍显示 OFFLINE」Bug**：重构 `isPrinterOnline()` 判定逻辑，接收到打印机有效遥测数据时实时精准展示 `PRINT` / `PREP` / `PAUSE` / `DONE` / `ERR` / `IDLE` 状态指示；仅在网络彻底断开或打印机明确处于离线时才显示 `OFFLINE`。
 * **修复断连屏幕空白与无信息**：同一台设备断线重连时保留最后有效数据，不再暴力将指标清空为 `--`，提升离线时的可读性。
 
+### 9. ✨ 网页后台布局优化、异步 HTTP 队列与屏幕 UI 玻璃拟态全面升级 (v0.5.20)
+* **Web 控制台响应式网格排版美化**：重构内置 Web 管理后台排版，屏幕布局卡片升级为独立全宽卡片，亮度定时与实时调试卡片在 PC 端智能并列为对称双列网格（`.paired-grid`），调试日志区域高度智能自适应，移动端与桌面端均获得更加协调规整的视觉比例。
+* **异步就绪 HTTP 队列与防阻塞优化**：引入 `PendingHttpClient` 异步等待队列与最大并发限制（`MAX_PENDING_HTTP_CLIENTS = 8`），配备 1500ms 首字节超时防护与单轮就绪轮询调度（`HTTP_CLIENTS_PER_LOOP`）；开启底层 TCP Socket `setNoDelay(true)`，彻底杜绝多端或浏览器并发预检请求阻塞单片机主循环。
+* **屏幕 UI 质感与微拟物/玻璃拟态（Glassmorphism）全面升级**：新增 `drawGlassCard()` 深度拟态微阴影与高光边框算法（`C_GLASS_HI` 高光与 `C_GLASS_LO` 阴影边界）、双色渐变进度条（`drawGlassProgress()`）及醒目的左侧发光重音饰条；针对打印速度提供紧凑型标签（`SIL 50%` / `STD 100%` / `SPT 124%` / `LUD 166%`），层数指示更直观。
+* **经典/大盘/时钟全布局局部安全重绘（Safe Redraw）加固**：重构 `drawClassicBaseSafe`、`drawDashboardFieldsSafe` 及 `drawClockScreenSafe`，引入完备的局部脏检查（Dirty Cache Check）机制，按需更新变动区域，彻底根治全屏重刷造成的闪烁、撕裂与残影问题。
+* **时钟待机与 NTP 同步刷新优化**：优化时钟布局 NTP 授时同步检测（`SYNC...` 状态防止无效重绘），解耦空闲刷新调度，仅在时钟模式下执行 1 秒精准步进，降低系统空闲负载。
+
 ---
 
 ## 🖼️ 界面与实机效果预览
@@ -82,7 +89,7 @@
 
 ## 🏷️ 版本号信息
 
-* **固件版本 (Firmware)**：`v0.5.14`
+* **固件版本 (Firmware)**：`v0.5.20`
 * **后端配置工具 (Backend WebUI)**：`v0.4.71-ui-clean`
 
 ---
