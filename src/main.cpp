@@ -18,7 +18,7 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.14";
+const char *FIRMWARE_VERSION = "firmware-v0.5.20";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000

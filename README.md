@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Fork 版本)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.14-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.4.71--ui--clean-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.20-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 本项目为原版 [PrintSphere Lite](https://github.com/ccord34/printsphere-lite) 的增强改进版本（Fork）。基于 ESP8266EX 与 240x240 ST7789 屏幕，专为 Bambu Lab（拓竹）3D 打印机打造的桌面打印状态与 AMS 耗材监控小电视。
@@ -65,6 +65,13 @@
 * **彻底修复「有数据更新右上角仍显示 OFFLINE」Bug**：重构 `isPrinterOnline()` 判定逻辑，接收到打印机有效遥测数据时实时精准展示 `PRINT` / `PREP` / `PAUSE` / `DONE` / `ERR` / `IDLE` 状态指示；仅在网络彻底断开或打印机明确处于离线时才显示 `OFFLINE`。
 * **修复断连屏幕空白与无信息**：同一台设备断线重连时保留最后有效数据，不再暴力将指标清空为 `--`，提升离线时的可读性。
 
+### 9. 🧭 v0.5.20 稳定版整理与版本统一
+* **网页后台栅格对齐**：修复移除状态灯卡片后“屏幕布局”单独占列的问题，保持通栏布局，并让“亮度定时”和“实时调试数据”同排显示；调试 JSON 卡片限高并支持滚动。
+* **HTTP 连接非阻塞化**：新增最多 8 个待首字节连接的 pending 队列，主循环每次分批处理连接并清理超时项，避免网页请求阻塞 MQTT、屏幕刷新和看门狗。
+* **TFT 玻璃视觉升级**：Dashboard、时钟和信息卡片加入玻璃卡片、高光边缘与阴影，进度条改为平滑渐变，改善 240×240 屏幕观感。
+* **经典布局优化**：剩余时间改为更紧凑的 `XhYY` / `XXm` 格式，减少文字溢出和重叠。
+* **版本统一**：固件、后端配置工具和中英文文档统一为 `v0.5.20`，并保持无灯珠控制的稳定配置。
+
 ---
 
 ## 🖼️ 界面与实机效果预览
@@ -82,8 +89,8 @@
 
 ## 🏷️ 版本号信息
 
-* **固件版本 (Firmware)**：`v0.5.14`
-* **后端配置工具 (Backend WebUI)**：`v0.4.71-ui-clean`
+* **固件版本 (Firmware)**：`v0.5.20`
+* **后端配置工具 (Backend WebUI)**：`v0.5.20`
 
 ---
 
