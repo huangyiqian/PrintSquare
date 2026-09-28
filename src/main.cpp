@@ -18,7 +18,7 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.20";
+const char *FIRMWARE_VERSION = "firmware-v0.5.25";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000
@@ -178,6 +178,7 @@ struct StoredConfig {
   String model = "";
   String alias = "";
   String layout = "classic";
+  uint16_t rotation = 0;
   String aliasBitmapHex = "";
   uint8_t aliasBitmapW = 0;
   uint8_t aliasBitmapH = 0;
@@ -635,6 +636,7 @@ bool saveStoredConfig() {
   doc["model"] = stored.model;
   doc["alias"] = stored.alias;
   doc["layout"] = stored.layout;
+  doc["rotation"] = stored.rotation;
   doc["alias_bitmap_hex"] = stored.aliasBitmapHex;
   doc["alias_bitmap_w"] = stored.aliasBitmapW;
   doc["alias_bitmap_h"] = stored.aliasBitmapH;
@@ -734,6 +736,8 @@ void loadStoredConfig() {
   stored.model = doc["model"] | "";
   stored.alias = doc["alias"] | "";
   stored.layout = doc["layout"] | "classic";
+  int savedRotation = doc["rotation"] | 0;
+  stored.rotation = (savedRotation == 90 || savedRotation == 180 || savedRotation == 270) ? (uint16_t)savedRotation : 0;
   stored.aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   stored.aliasBitmapW = doc["alias_bitmap_w"] | 0;
   stored.aliasBitmapH = doc["alias_bitmap_h"] | 0;
@@ -766,6 +770,7 @@ String statusJson() {
   doc["model"] =
       normalizedModelName(pr.model.length() ? pr.model : stored.model);
   doc["layout"] = stored.layout;
+  doc["rotation"] = stored.rotation;
   doc["mqtt_host"] = stored.mqttHost;
   doc["mqtt_username"] = stored.mqttUsername.length() ? "set" : "";
   doc["mqtt_connected"] = mqttNet.connected();
@@ -1378,7 +1383,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "拖动实时应用背光</p></div></div>"));
 
   // Card 3: Screen Layout
-  client.print( F("<div class=\"glass\" style=\"grid-column:1 / -1\"><h2>屏幕布局</h2><div class=\"segmented\">"));
+  client.print( F("<div class=\"glass\" style=\"grid-column:1 / -1\"><h2>屏幕布局</h2><div class=\"segmented layout-segmented\">"));
   String lc = stored.layout;
   client.print( F("<button id=\"lc0\" onclick=\"setLayout('classic')\""));
   if (lc == "classic")
@@ -1392,6 +1397,25 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   if (lc == "clock")
     client.print( F(" class=\"active\""));
   client.print( F(">时钟</button>"));
+  client.print( F("</div>"));
+  client.print( F("<div class=\"label\" style=\"margin-top:14px\">屏幕旋转</div><div class=\"segmented rotation-segmented\">"));
+  uint16_t currentRotation = stored.rotation;
+  client.print( F("<button id=\"rc0\" onclick=\"setRotation(0)\""));
+  if (currentRotation == 0)
+    client.print( F(" class=\"active\""));
+  client.print( F(">0°</button>"));
+  client.print( F("<button id=\"rc90\" onclick=\"setRotation(90)\""));
+  if (currentRotation == 90)
+    client.print( F(" class=\"active\""));
+  client.print( F(">90°</button>"));
+  client.print( F("<button id=\"rc180\" onclick=\"setRotation(180)\""));
+  if (currentRotation == 180)
+    client.print( F(" class=\"active\""));
+  client.print( F(">180°</button>"));
+  client.print( F("<button id=\"rc270\" onclick=\"setRotation(270)\""));
+  if (currentRotation == 270)
+    client.print( F(" class=\"active\""));
+  client.print( F(">270°</button>"));
   client.print( F("</div></div>"));
 
   client.print( F("<div class=\"paired-grid\">"));
@@ -1621,9 +1645,14 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "    if(d.layout){\n"
         "      var idx=['classic','dashboard','clock'].indexOf(d.layout);\n"
         "      if(idx>=0){\n"
-        "        document.querySelectorAll('.segmented button').forEach(b=>b.classList.remove('active'));\n"
+        "        document.querySelectorAll('.layout-segmented button').forEach(b=>b.classList.remove('active'));\n"
         "        var btn=document.getElementById('lc'+idx);if(btn)btn.classList.add('active');\n"
         "      }\n"
+        "    }\n"
+        "    if(d.rotation!==undefined){\n"
+        "      var rotation=Number(d.rotation);\n"
+        "      document.querySelectorAll('.rotation-segmented button').forEach(b=>b.classList.remove('active'));\n"
+        "      var rotationBtn=document.getElementById('rc'+rotation);if(rotationBtn)rotationBtn.classList.add('active');\n"
         "    }\n"
         "    updatePrinterUI(d);\n"
         "  }).catch(e=>{});\n"
@@ -1645,11 +1674,15 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "input',function(){document.getElementById('bv').textContent=this."
             "value+'%';});brt.addEventListener('change',function(){postConfig({"
             "brightness:parseInt(this.value)});});}\n"));
-  client.print( F("function setLayout(v){document.querySelectorAll('.segmented "
+  client.print( F("function setLayout(v){document.querySelectorAll('.layout-segmented "
             "button').forEach(b=>b.classList.remove('active'));const "
             "idx=['classic','dashboard','clock'].indexOf(v);if(idx>=0)document."
             "getElementById('lc'+idx).classList.add('active');postConfig({"
             "layout:v});}\n"));
+  client.print( F("function setRotation(v){document.querySelectorAll('.rotation-segmented "
+            "button').forEach(b=>b.classList.remove('active'));const "
+            "btn=document.getElementById('rc'+v);if(btn)btn.classList.add('active');"
+            "postConfig({rotation:Number(v)});}\n"));
   client.print( F("function toggleSchedule(){var "
             "e=document.getElementById('schedFields'),c=document."
             "getElementById('bse');e.style.display=c.checked?'block':'none';"
@@ -1711,6 +1744,15 @@ String applyConfigBody(const String &body, int &statusCode) {
   const char *model = doc["model"] | doc["printer_model"] | "";
   const char *alias = doc["alias"] | doc["display_alias"] | "";
   const char *layout = doc["layout"] | doc["display_layout"] | "";
+  int requestedRotation = -1;
+  if (doc["rotation"].is<int>() || doc["rotation"].is<unsigned int>())
+    requestedRotation = doc["rotation"].as<int>();
+  else if (doc["rotation"].is<const char *>())
+    requestedRotation = atoi(doc["rotation"].as<const char *>());
+  else if (doc["display_rotation"].is<int>() || doc["display_rotation"].is<unsigned int>())
+    requestedRotation = doc["display_rotation"].as<int>();
+  else if (doc["display_rotation"].is<const char *>())
+    requestedRotation = atoi(doc["display_rotation"].as<const char *>());
   const char *aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   const char *printersPayload = doc["printers_json"] | "";
   int requestedBrightness = doc["brightness"] | doc["brightness_percent"] | -1;
@@ -1792,6 +1834,7 @@ String applyConfigBody(const String &body, int &statusCode) {
     cache.baseDrawn = false;
   }
   bool layoutChanged = false;
+  bool rotationChanged = false;
   if (layout[0]) {
     String nextLayout = layout;
     nextLayout.toLowerCase();
@@ -1802,6 +1845,17 @@ String applyConfigBody(const String &body, int &statusCode) {
       stored.layout = nextLayout;
       layoutChanged = true;
       cache.baseDrawn = false;
+    }
+  }
+  if (requestedRotation >= 0) {
+    uint16_t nextRotation = (requestedRotation == 90 || requestedRotation == 180 ||
+                                 requestedRotation == 270)
+                                ? (uint16_t)requestedRotation
+                                : 0;
+    if (stored.rotation != nextRotation) {
+      stored.rotation = nextRotation;
+      rotationChanged = true;
+      cache = RenderCache();
     }
   }
   if (aliasBitmapHex[0] || doc["alias_bitmap_hex"].is<const char *>()) {
@@ -1827,6 +1881,13 @@ String applyConfigBody(const String &body, int &statusCode) {
   }
   bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged;
   bool ok = anyConfigChanged ? saveStoredConfig() : true;
+  if (rotationChanged && !anyConfigChanged) {
+    ok = saveStoredConfig();
+  }
+  if (rotationChanged) {
+    tft.setRotation((uint8_t)(stored.rotation / 90));
+    tft.fillScreen(BG_BLACK);
+  }
   if (wifiChanged) {
     wifiReconnectPending = true;
   } else if (mqttChanged) {
@@ -1844,6 +1905,7 @@ String applyConfigBody(const String &body, int &statusCode) {
   outDoc["ip"] = WiFi.localIP().toString();
   outDoc["brightness"] = stored.brightness;
   outDoc["layout"] = stored.layout;
+  outDoc["rotation"] = stored.rotation;
   String out;
   serializeJson(outDoc, out);
   statusCode = ok ? 200 : 500;
@@ -1903,6 +1965,7 @@ String configBodyFromQuery(const String &query) {
           key == "name" || key == "display_name" || key == "model" ||
           key == "printer_model" || key == "alias" || key == "display_alias" ||
           key == "layout" || key == "display_layout" ||
+          key == "rotation" || key == "display_rotation" ||
           key == "alias_bitmap_hex" || key == "alias_bitmap_w" ||
           key == "alias_bitmap_h" || key == "printers_json" ||
           key == "brightness" || key == "brightness_percent") {
@@ -4754,7 +4817,7 @@ void setup() {
 
   tft.begin();
   tft.invertDisplay(1);
-  tft.setRotation(0);
+  tft.setRotation((uint8_t)(stored.rotation / 90));
   pinMode(LCD_BL_PIN, OUTPUT);
   analogWriteRange(1023);
   analogWriteFreq(1000);

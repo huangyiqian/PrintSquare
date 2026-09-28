@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Fork 版本)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.20-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.25-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.25-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 本项目为原版 [PrintSphere Lite](https://github.com/ccord34/printsphere-lite) 的增强改进版本（Fork）。基于 ESP8266EX 与 240x240 ST7789 屏幕，专为 Bambu Lab（拓竹）3D 打印机打造的桌面打印状态与 AMS 耗材监控小电视。
@@ -72,6 +72,13 @@
 * **经典布局优化**：剩余时间改为更紧凑的 `XhYY` / `XXm` 格式，减少文字溢出和重叠。
 * **版本统一**：固件、后端配置工具和中英文文档统一为 `v0.5.20`，并保持无灯珠控制的稳定配置。
 
+### 10. 🔄 v0.5.25 屏幕旋转配置
+* **90° 步进旋转**：TFT 屏幕内容支持 `0° / 90° / 180° / 270°` 四种方向，经典、信息面板和时钟布局共用同一套旋转设置。
+* **双后台可调**：ESP 内置 8081 页面和桌面 Web 配置工具均可调整旋转角度，串口与 HTTP 配置链路都会同步该字段。
+* **断电保存**：旋转配置写入 LittleFS `/cloud.json`，设备重启后自动恢复。
+* **按需重绘**：只有旋转角度实际变化时才清屏并重建显示缓存，普通数据刷新继续使用原有局部更新策略。
+* **版本统一**：固件、后端配置工具、中英文文档统一为 `v0.5.25`。
+
 ---
 
 ## 🖼️ 界面与实机效果预览
@@ -89,8 +96,8 @@
 
 ## 🏷️ 版本号信息
 
-* **固件版本 (Firmware)**：`v0.5.20`
-* **后端配置工具 (Backend WebUI)**：`v0.5.20`
+* **固件版本 (Firmware)**：`v0.5.25`
+* **后端配置工具 (Backend WebUI)**：`v0.5.25`
 
 ---
 
