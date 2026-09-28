@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.20-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.20-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.25-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.25-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 This project is an enhanced and improved fork of the original [PrintSphere Lite](https://github.com/ccord34/printsphere-lite). Powered by ESP8266EX and a 240x240 ST7789 display, it serves as a mini desktop monitor for real-time printing status and AMS filament tracking for Bambu Lab 3D printers.
@@ -72,6 +72,13 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 * **Classic layout refinement**: Remaining time uses the more compact `XhYY` / `XXm` format to reduce overflow and overlap.
 * **Version alignment**: Firmware, backend tooling, and both README documents now use `v0.5.20`, retaining the stable no-LED configuration.
 
+### 10. 🔄 v0.5.25 Display Rotation Configuration
+* **90-degree rotation steps**: TFT content supports `0° / 90° / 180° / 270°`; classic, dashboard, and clock layouts share the same rotation setting.
+* **Adjustable from both admin surfaces**: The ESP built-in page on port 8081 and the desktop Web configuration tool can both change the angle, with serial and HTTP configuration paths carrying the field.
+* **Power-cycle persistence**: The setting is stored in LittleFS `/cloud.json` and restored automatically after reboot.
+* **Redraw only when needed**: The screen clears and rebuilds its render cache only when the angle actually changes; normal data refreshes retain the existing partial-update strategy.
+* **Version alignment**: Firmware, backend tooling, and both README documents are unified at `v0.5.25`.
+
 ---
 
 ## 🖼️ Interface & Hardware Previews
@@ -89,8 +96,8 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 ## 🏷️ Version Information
 
-* **Firmware Version**: `v0.5.20`
-* **Backend WebUI**: `v0.5.20`
+* **Firmware Version**: `v0.5.25`
+* **Backend WebUI**: `v0.5.25`
 
 ---
 
