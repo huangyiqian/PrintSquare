@@ -61,7 +61,7 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 ## 🚀 Quick Start
 
 1. Connect ESP8266 to your Windows PC using a USB data cable.
-2. Open `后端配置工具\打开配置工具.bat`, which opens the WebUI in your default browser, and log in to your Bambu Lab account.
+2. Open `后端配置工具\PrintSphere配置工具.exe` (single-file tool, just double-click), which opens the WebUI in your default browser, and log in to your Bambu Lab account.
 3. Select or enter your 2.4G Wi-Fi SSID and password, then click **“Save & Configure ESP WiFi”**.
 4. Refresh printer list, select your target Bambu printer, and click **“Show This Printer & Sync”**.
 5. Once print data appears on the ESP8266 screen, you can unplug the device from your computer and power it via any 5V USB source.

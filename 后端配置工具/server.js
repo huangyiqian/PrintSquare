@@ -340,7 +340,11 @@ function pickPort() {
 }
 
 let PORT = pickPort();
-const DATA_DIR = path.join(__dirname, "data");
+// Packaged as a single-file exe (Node SEA) __dirname points inside the binary,
+// so launcher.js passes the real folder through PSPHERE_BASE_DIR. Running from
+// source (node server.js) keeps using __dirname exactly as before.
+const BASE_DIR = process.env.PSPHERE_BASE_DIR || __dirname;
+const DATA_DIR = path.join(BASE_DIR, "data");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DEVICES_FILE = path.join(DATA_DIR, "devices.json");
 const HISTORY_FILE = path.join(DATA_DIR, "device-history.jsonl");

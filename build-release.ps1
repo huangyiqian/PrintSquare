@@ -33,6 +33,7 @@ $nameFlasher = @(0x5237, 0x56FA, 0x4EF6, 0x5DE5, 0x5177)
 $nameReadme = @(0x4F7F, 0x7528, 0x8BF4, 0x660E)
 $nameDriver = @(0x9A71, 0x52A8)
 $fileOpenCompanion = CnName @(0x6253, 0x5F00, 0x914D, 0x7F6E, 0x5DE5, 0x5177) ".bat"
+$fileCompanionExe = "PrintSphere" + (CnName @(0x914D, 0x7F6E, 0x5DE5, 0x5177) ".exe")
 $fileOneClickFlash = CnName @(0x4E00, 0x952E, 0x5237, 0x5165, 0x56FA, 0x4EF6) ".bat"
 
 $sourceFirmwareDir = Join-CnPath $root $nameFirmware
@@ -75,6 +76,15 @@ Copy-Required (Join-Path $sourceCompanionDir "package.json") (Join-Path $compani
 Copy-Required (Join-Path $sourceCompanionDir "README.md") (Join-Path $companionOut "README.md")
 Copy-Required (Join-Path $sourceCompanionDir "VERSIONS.md") (Join-Path $companionOut "VERSIONS.md")
 Copy-Optional (Join-Path $sourceCompanionDir "node\node.exe") (Join-Path $companionOut "node\node.exe")
+
+$companionExe = Join-Path $sourceCompanionDir $fileCompanionExe
+if (Test-Path -LiteralPath $companionExe) {
+  Copy-Item -LiteralPath $companionExe -Destination (Join-Path $companionOut $fileCompanionExe) -Force
+  Write-Host "Included single-file setup tool exe."
+} else {
+  Write-Host "WARNING: single-file exe not found. Run build-exe.ps1 in the companion folder first." -ForegroundColor Yellow
+  Write-Host "         This package will fall back to the .bat launcher." -ForegroundColor Yellow
+}
 
 Copy-Required (Join-Path $sourceFlasherDir $fileOneClickFlash) (Join-Path $flasherOut $fileOneClickFlash)
 Copy-Required (Join-Path $sourceFlasherDir "flash-firmware.ps1") (Join-Path $flasherOut "flash-firmware.ps1")

@@ -36,6 +36,11 @@ dsh-*.md
 # Internal development notes (local only, never uploaded)
 docs/DSH开发约定.md
 
+# Single-file exe build (Node SEA): toolchain cache and build output.
+# The exe is ~90MB, so it ships inside release packages instead of the repo.
+后端配置工具/.exe-build/
+后端配置工具/*.exe
+
 # OS / editor noise
 Thumbs.db
 .DS_Store
