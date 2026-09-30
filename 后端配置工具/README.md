@@ -2,7 +2,15 @@
 
 这是 Windows 电脑端配置工具，用于完成 Bambu 云登录、ESP WiFi 写入、打印机列表读取和打印机选择。
 
-客户入口：
+客户入口（推荐）：
+
+```text
+PrintSphere配置工具.exe
+```
+
+单文件 exe，双击即用：它会自动清掉上次的状态、启动后端服务并打开浏览器配置页。窗口关掉服务就退出，不需要再管命令行。
+
+如果 exe 被杀毒软件拦截或无法运行，可以退回原来的 bat 方式（需要保留 `node\node.exe` 与 `server.js`）：
 
 ```text
 打开配置工具.bat
@@ -10,10 +18,20 @@
 
 工具默认从 `8795` 端口启动。如果端口被占用，会自动尝试后续端口，并自动打开浏览器。
 
+## 重新打包 exe
+
+修改过 `server.js` 之后需要重新生成 exe：
+
+```text
+双击运行 build-exe.ps1（或在终端 powershell -File build-exe.ps1）
+```
+
+脚本用 `node\node.exe` 作为 SEA 底座，把 `launcher.js` 与 `server.js` 打进一个 exe；首次构建会联网下载 postject 工具链（缓存在 `.exe-build\`）。产物 `PrintSphere配置工具.exe` 约 90MB，随发布包分发，不入 git。
+
 ## 配置步骤
 
 1. 用 USB 将当前要配置的 ESP 连接到电脑。
-2. 双击 `打开配置工具.bat`。
+2. 双击 `PrintSphere配置工具.exe`（或退回 `打开配置工具.bat`）。
 3. 登录 Bambu 云服务账号。
 4. 填写或选择 2.4G WiFi，点击“保存并配置 ESP WiFi”。
 5. 设置屏幕亮度和 `0° / 90° / 180° / 270°` 旋转角度；点击“应用屏幕设置”写入当前 ESP。
