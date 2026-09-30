@@ -27,6 +27,15 @@ companion/node/
 交付包_*.zip
 release/
 
+# AI conversation transcripts (local session records, never uploaded)
+向我解释这个项目是干啥的-*.md
+codex-*.md
+dsh-*.md
+*-????????-????-????-????-????????????.md
+
+# Internal development notes (local only, never uploaded)
+docs/DSH开发约定.md
+
 # OS / editor noise
 Thumbs.db
 .DS_Store
