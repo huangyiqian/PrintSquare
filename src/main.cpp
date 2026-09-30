@@ -179,6 +179,7 @@ struct StoredConfig {
   String alias = "";
   String layout = "classic";
   uint16_t rotation = 0;
+  uint8_t mirror = 0; // 0 = off, 1 = left/right (MX), 2 = top/bottom (MY)
   String aliasBitmapHex = "";
   uint8_t aliasBitmapW = 0;
   uint8_t aliasBitmapH = 0;
@@ -637,6 +638,7 @@ bool saveStoredConfig() {
   doc["alias"] = stored.alias;
   doc["layout"] = stored.layout;
   doc["rotation"] = stored.rotation;
+  doc["mirror"] = stored.mirror;
   doc["alias_bitmap_hex"] = stored.aliasBitmapHex;
   doc["alias_bitmap_w"] = stored.aliasBitmapW;
   doc["alias_bitmap_h"] = stored.aliasBitmapH;
@@ -738,6 +740,8 @@ void loadStoredConfig() {
   stored.layout = doc["layout"] | "classic";
   int savedRotation = doc["rotation"] | 0;
   stored.rotation = (savedRotation == 90 || savedRotation == 180 || savedRotation == 270) ? (uint16_t)savedRotation : 0;
+  int savedMirror = doc["mirror"] | 0;
+  stored.mirror = (savedMirror == 1 || savedMirror == 2) ? (uint8_t)savedMirror : 0;
   stored.aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   stored.aliasBitmapW = doc["alias_bitmap_w"] | 0;
   stored.aliasBitmapH = doc["alias_bitmap_h"] | 0;
@@ -771,6 +775,7 @@ String statusJson() {
       normalizedModelName(pr.model.length() ? pr.model : stored.model);
   doc["layout"] = stored.layout;
   doc["rotation"] = stored.rotation;
+  doc["mirror"] = stored.mirror;
   doc["mqtt_host"] = stored.mqttHost;
   doc["mqtt_username"] = stored.mqttUsername.length() ? "set" : "";
   doc["mqtt_connected"] = mqttNet.connected();
@@ -1416,6 +1421,21 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   if (currentRotation == 270)
     client.print( F(" class=\"active\""));
   client.print( F(">270°</button>"));
+  client.print( F("</div>"));
+  client.print( F("<div class=\"label\">屏幕镜像（半透半反镜用）</div><div class=\"segmented mirror-segmented\">"));
+  uint8_t currentMirror = stored.mirror;
+  client.print( F("<button id=\"mk0\" onclick=\"setMirror(0)\""));
+  if (currentMirror == 0)
+    client.print( F(" class=\"active\""));
+  client.print( F(">无</button>"));
+  client.print( F("<button id=\"mk1\" onclick=\"setMirror(1)\""));
+  if (currentMirror == 1)
+    client.print( F(" class=\"active\""));
+  client.print( F(">左右镜像</button>"));
+  client.print( F("<button id=\"mk2\" onclick=\"setMirror(2)\""));
+  if (currentMirror == 2)
+    client.print( F(" class=\"active\""));
+  client.print( F(">上下镜像</button>"));
   client.print( F("</div></div>"));
 
   client.print( F("<div class=\"paired-grid\">"));
@@ -1654,6 +1674,11 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "      document.querySelectorAll('.rotation-segmented button').forEach(b=>b.classList.remove('active'));\n"
         "      var rotationBtn=document.getElementById('rc'+rotation);if(rotationBtn)rotationBtn.classList.add('active');\n"
         "    }\n"
+        "    if(d.mirror!==undefined){\n"
+        "      var mirror=Number(d.mirror);\n"
+        "      document.querySelectorAll('.mirror-segmented button').forEach(b=>b.classList.remove('active'));\n"
+        "      var mirrorBtn=document.getElementById('mk'+mirror);if(mirrorBtn)mirrorBtn.classList.add('active');\n"
+        "    }\n"
         "    updatePrinterUI(d);\n"
         "  }).catch(e=>{});\n"
         "}\n"
@@ -1683,6 +1708,10 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "button').forEach(b=>b.classList.remove('active'));const "
             "btn=document.getElementById('rc'+v);if(btn)btn.classList.add('active');"
             "postConfig({rotation:Number(v)});}\n"));
+  client.print( F("function setMirror(v){document.querySelectorAll('.mirror-segmented "
+            "button').forEach(b=>b.classList.remove('active'));const "
+            "btn=document.getElementById('mk'+v);if(btn)btn.classList.add('active');"
+            "postConfig({mirror:Number(v)});}\n"));
   client.print( F("function toggleSchedule(){var "
             "e=document.getElementById('schedFields'),c=document."
             "getElementById('bse');e.style.display=c.checked?'block':'none';"
@@ -1724,6 +1753,35 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   realClient.stop(100);
 }
 
+// ---------------------------------------------------------------------------
+// Display orientation = rotation + optional mirror (beam-splitter builds).
+// A panel viewed through a 45 degree half mirror (HoloCubic style) shows a
+// mirror image, which no rotation value can undo, so the MX/MY MADCTL bit has
+// to be toggled. TFT_eSPI's ST7789 driver only implements rotations 0-3
+// (TFT_Drivers/ST7789_2_Rotation.h uses "rotation = m % 4"), unlike the
+// ILI9341 driver which has mirrored 4-7 cases, so MADCTL is written here again
+// on top of setRotation(). colstart/rowstart and the window size stay as
+// computed by setRotation(), only the scan direction changes.
+static const uint8_t kMadctlBase[4] = {
+    TFT_MAD_COLOR_ORDER,
+    TFT_MAD_MX | TFT_MAD_MV | TFT_MAD_COLOR_ORDER,
+    TFT_MAD_MX | TFT_MAD_MY | TFT_MAD_COLOR_ORDER,
+    TFT_MAD_MV | TFT_MAD_MY | TFT_MAD_COLOR_ORDER,
+};
+
+void applyDisplayOrientation() {
+  uint8_t index = (uint8_t)((stored.rotation / 90) & 0x03);
+  tft.setRotation(index);
+  if (stored.mirror == 0)
+    return;
+  uint8_t madctl = kMadctlBase[index];
+  if (stored.mirror == 1)
+    madctl ^= TFT_MAD_MX; // left/right mirror
+  else
+    madctl ^= TFT_MAD_MY; // top/bottom mirror
+  tft.writecommand(TFT_MADCTL);
+  tft.writedata(madctl);
+}
 
 String applyConfigBody(const String &body, int &statusCode) {
   JsonDocument doc;
@@ -1753,6 +1811,15 @@ String applyConfigBody(const String &body, int &statusCode) {
     requestedRotation = doc["display_rotation"].as<int>();
   else if (doc["display_rotation"].is<const char *>())
     requestedRotation = atoi(doc["display_rotation"].as<const char *>());
+  int requestedMirror = -1;
+  if (doc["mirror"].is<int>() || doc["mirror"].is<unsigned int>())
+    requestedMirror = doc["mirror"].as<int>();
+  else if (doc["mirror"].is<const char *>())
+    requestedMirror = atoi(doc["mirror"].as<const char *>());
+  else if (doc["display_mirror"].is<int>() || doc["display_mirror"].is<unsigned int>())
+    requestedMirror = doc["display_mirror"].as<int>();
+  else if (doc["display_mirror"].is<const char *>())
+    requestedMirror = atoi(doc["display_mirror"].as<const char *>());
   const char *aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   const char *printersPayload = doc["printers_json"] | "";
   int requestedBrightness = doc["brightness"] | doc["brightness_percent"] | -1;
@@ -1835,6 +1902,7 @@ String applyConfigBody(const String &body, int &statusCode) {
   }
   bool layoutChanged = false;
   bool rotationChanged = false;
+  bool mirrorChanged = false;
   if (layout[0]) {
     String nextLayout = layout;
     nextLayout.toLowerCase();
@@ -1855,6 +1923,16 @@ String applyConfigBody(const String &body, int &statusCode) {
     if (stored.rotation != nextRotation) {
       stored.rotation = nextRotation;
       rotationChanged = true;
+      cache = RenderCache();
+    }
+  }
+  if (requestedMirror >= 0) {
+    uint8_t nextMirror = (requestedMirror == 1 || requestedMirror == 2)
+                             ? (uint8_t)requestedMirror
+                             : 0;
+    if (stored.mirror != nextMirror) {
+      stored.mirror = nextMirror;
+      mirrorChanged = true;
       cache = RenderCache();
     }
   }
@@ -1879,13 +1957,11 @@ String applyConfigBody(const String &body, int &statusCode) {
       brightnessChanged = true;
     }
   }
-  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged;
+  bool orientationChanged = rotationChanged || mirrorChanged;
+  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged || orientationChanged;
   bool ok = anyConfigChanged ? saveStoredConfig() : true;
-  if (rotationChanged && !anyConfigChanged) {
-    ok = saveStoredConfig();
-  }
-  if (rotationChanged) {
-    tft.setRotation((uint8_t)(stored.rotation / 90));
+  if (orientationChanged) {
+    applyDisplayOrientation();
     tft.fillScreen(BG_BLACK);
   }
   if (wifiChanged) {
@@ -1906,6 +1982,7 @@ String applyConfigBody(const String &body, int &statusCode) {
   outDoc["brightness"] = stored.brightness;
   outDoc["layout"] = stored.layout;
   outDoc["rotation"] = stored.rotation;
+  outDoc["mirror"] = stored.mirror;
   String out;
   serializeJson(outDoc, out);
   statusCode = ok ? 200 : 500;
@@ -1966,6 +2043,7 @@ String configBodyFromQuery(const String &query) {
           key == "printer_model" || key == "alias" || key == "display_alias" ||
           key == "layout" || key == "display_layout" ||
           key == "rotation" || key == "display_rotation" ||
+          key == "mirror" || key == "display_mirror" ||
           key == "alias_bitmap_hex" || key == "alias_bitmap_w" ||
           key == "alias_bitmap_h" || key == "printers_json" ||
           key == "brightness" || key == "brightness_percent") {
@@ -4817,7 +4895,7 @@ void setup() {
 
   tft.begin();
   tft.invertDisplay(1);
-  tft.setRotation((uint8_t)(stored.rotation / 90));
+  applyDisplayOrientation();
   pinMode(LCD_BL_PIN, OUTPUT);
   analogWriteRange(1023);
   analogWriteFreq(1000);
