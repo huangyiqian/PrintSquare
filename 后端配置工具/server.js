@@ -5,10 +5,18 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.25";
+const BACKEND_VERSION = "backend-v0.5.26-beta";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
+    changes: [
+      "新增屏幕镜像支持：无 / 左右镜像 / 上下镜像，用于半透半反镜（HoloCubic 风格）等镜面观看场景",
+      "镜像可与 0° / 90° / 180° / 270° 旋转自由组合；配置写入 LittleFS 并在重启后恢复，串口和 HTTP 配置链路都会同步 mirror",
+      "仅方向（旋转或镜像）实际变化时清屏重绘，普通数据刷新继续沿用局部更新策略"
+    ]
+  },
+  {
+    version: "backend-v0.5.25",
     changes: [
       "TFT 屏幕内容支持以 90° 为步进旋转：0° / 90° / 180° / 270°，ESP 内置后台和桌面 Web 后台均可调整",
       "旋转配置写入 LittleFS 并在重启后恢复；串口和 HTTP 配置链路都会同步 rotation",

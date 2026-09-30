@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Fork 版本)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.25-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.25-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.26--beta-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.26--beta-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 本项目为原版 [PrintSphere Lite](https://github.com/ccord34/printsphere-lite) 的增强改进版本（Fork）。基于 ESP8266EX 与 240x240 ST7789 屏幕，专为 Bambu Lab（拓竹）3D 打印机打造的桌面打印状态与 AMS 耗材监控小电视。
