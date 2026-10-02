@@ -6,7 +6,7 @@
    powershell -NoProfile -File "后端配置工具\build-exe.ps1"
 
  产物：
-   后端配置工具\PrintSphere配置工具.exe   （约 90MB，内含 Node 运行时与后端代码）
+   后端配置工具\PrintSquare配置工具.exe   （约 90MB，内含 Node 运行时与后端代码）
 
  说明：
    * 底座用本目录下 node\node.exe，保证 exe 里的 Node 版本与开发时一致
@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $node)) {
 
 $buildDir = Join-Path $PSScriptRoot '.exe-build'
 $blob = Join-Path $buildDir 'sea-prep.blob'
-$exeName = 'PrintSphere配置工具.exe'
+$exeName = 'PrintSquare配置工具.exe'
 $outExe = Join-Path $PSScriptRoot $exeName
 $postjectCli = Join-Path $buildDir 'node_modules\postject\dist\cli.js'
 $stderrFile = Join-Path $buildDir 'native-stderr.txt'

@@ -1,10 +1,12 @@
 [ 简体中文 ](README.md) | [ English ](README_en.md)
 
-# PrintSphere Lite Plus (Enhanced Fork)
+# PrintSquare (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.31-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.31-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.32-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.32-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
+
+📦 Repository: [https://github.com/huangyiqian/PrintSquare](https://github.com/huangyiqian/PrintSquare)
 
 This project is an enhanced and improved fork of the original [PrintSphere Lite](https://github.com/ccord34/printsphere-lite). Powered by ESP8266EX and a 240x240 ST7789 display, it serves as a mini desktop monitor for real-time printing status and AMS filament tracking for Bambu Lab 3D printers.
 
@@ -19,16 +21,18 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 * **ST7789 color calibration**: Uses corrected BGR565 color mapping for accurate filament colors.
 
 ### 📊 Screen UI & Layouts
-* **Three display modes**: Provides Classic, Dashboard, and Clock layouts for the 240x240 ST7789 display.
-* **Complete print overview**: Shows print progress, nozzle temperature, bed temperature, chamber temperature, and estimated remaining time.
-* **Display controls**: Supports 0-100% backlight brightness, automatic dimming when idle, and 90-degree rotation steps persisted across power loss.
+* **Three screen layouts**: Classic, Dashboard and Clock, all fitting the 240x240 ST7789 display, switchable from the built-in 8081 admin page.
+* **Complete print overview**: Shows print progress, nozzle temperature, bed temperature, chamber temperature, layer count and estimated remaining time.
+* **Backlight & brightness schedule**: 0-100% manual brightness plus optional day / night time slots (configurable on the 8081 page); settings persist across power loss.
+* **Half-mirror support (image flip)**: Built for HoloCubic-style 45° half-mirror assemblies, offering Off / Left-right mirror — a mirrored image cannot be corrected by any rotation angle, so it must be flipped electronically. The flip combines freely with 0° / 90° / 180° / 270° rotation, can be switched from both the 8081 page and the desktop tool, and is stored in LittleFS so it survives reboots.
+* **Screen rotation**: 0° / 90° / 180° / 270° rotation steps, persisted across power loss; only orientation changes trigger a full redraw, while normal data updates stay partial.
 * **Smooth visual effects**: Uses continuous gradient progress indicators and glass-inspired elements, with partial updates to reduce full-screen flicker.
 
 ### 🌐 Web Configuration Tool
-* **Device setup**: Supports Wi-Fi scanning, printer selection and synchronization, display layout switching, brightness, and rotation settings.
+* **Device setup**: Wi-Fi scanning, printer selection and synchronization, layout / brightness / rotation / mirror settings; writes go over USB serial first with LAN HTTP as fallback.
 * **Live monitoring**: Provides print status, progress, temperatures, layer information, remaining time, and filament slot data.
-* **Multi-device management**: Isolates configuration per hardware identifier, prioritizes USB serial writes, and uses HTTP over the local network as a fallback.
-* **Dual-port access**: Provides Web management pages on both port 80 and port 8081.
+* **Multi-device management**: Keeps a separate profile per ESP keyed by MAC / device_id (Wi-Fi, serial port, address, selected printer); the cloud account and printer list are shared.
+* **Dual-port access**: The same admin page listens on both port 80 and port 8081, so it opens without typing a port; `http://ESP-IP:8081/` is the recommended URL.
 * **Chinese/English switch**: The built-in ESP page on port 8081 can switch between Chinese and English; the choice is stored in the browser.
 
 ---
@@ -61,12 +65,13 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 ## 🚀 Quick Start
 
-1. Connect ESP8266 to your Windows PC using a USB data cable.
-2. Open `后端配置工具\PrintSphere配置工具.exe` (single-file tool, just double-click), which opens the WebUI in your default browser, and log in to your Bambu Lab account.
-3. Select or enter your 2.4G Wi-Fi SSID and password, then click **“Save & Configure ESP WiFi”**.
-4. Refresh printer list, select your target Bambu printer, and click **“Show This Printer & Sync”**.
-5. Once print data appears on the ESP8266 screen, you can unplug the device from your computer and power it via any 5V USB source.
-6. Once connected to Wi-Fi, you can also manage the device directly in your browser via `http://[ESP_IP_ADDRESS]:8081/`.
+1. Download the latest archive `PrintSquare_v<version>_<date>_build.zip` from [GitHub Releases](https://github.com/huangyiqian/PrintSquare/releases) and extract it.
+2. Connect the ESP8266 to your Windows PC with a USB cable, then double-click `刷固件工具\一键刷入固件.bat` inside the extracted package and follow the prompts to flash the firmware.
+3. Open `后端配置工具\PrintSquare配置工具.exe` (single-file tool, just double-click), which opens the WebUI in your default browser, and log in to your Bambu Lab account.
+4. Select or enter your 2.4G Wi-Fi SSID and password, then click **“Save & Configure ESP WiFi”**.
+5. Refresh printer list, select your target Bambu printer, and click **“Show This Printer & Sync”**.
+6. Once print data appears on the ESP8266 screen, you can unplug the device from your computer and power it via any 5V USB source.
+7. Once connected to Wi-Fi, you can also manage the device directly in your browser via `http://[ESP_IP_ADDRESS]:8081/`.
 
 ---
 

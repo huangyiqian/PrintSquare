@@ -1,5 +1,5 @@
 ﻿// ============================================================
-// SD2 PrintSphere — TFT_eSPI 显示配置
+// SD2 PrintSquare — TFT_eSPI 显示配置
 // 硬件: SD2 小电视 (ESP8266 + ST7789 240×240)
 //
 // 关键: 不使用帧缓冲 (Framebuffer-less)

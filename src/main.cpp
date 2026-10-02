@@ -1,5 +1,5 @@
 // ============================================================
-// SD2 PrintSphere Lite - ESP8266 Bambu Cloud MQTT display
+// SD2 PrintSquare - ESP8266 Bambu Cloud MQTT display
 // The companion backend only provisions cloud credentials and printer choice.
 // ============================================================
 
@@ -18,7 +18,7 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.31";
+const char *FIRMWARE_VERSION = "firmware-v0.5.32";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000
@@ -156,7 +156,8 @@ struct PrinterState {
   String displayName = "";
   String model = "";
   String serial = "";
-  bool online = true;
+  // 未收到真实打印数据前保持 false，避免重启后在无数据时显示 PREP
+  bool online = false;
   bool dualNozzle = false;
   int activeTray = -1;
   int spdLvl = -1;
@@ -241,6 +242,8 @@ unsigned long lastMqttConnect = 0;
 unsigned long lastMqttRequest = 0;
 unsigned long lastMqttPing = 0;
 unsigned long lastMqttDataReceived = 0;
+// 最近一次收到打印机遥测 PUBLISH 的时间（用于断定打印机关机）
+unsigned long lastPrinterActivity = 0;
 uint32_t mqttReconnectDelay = MQTT_RECONNECT_INTERVAL;
 bool mqttForceConnect = true;
 String lastMqttError = "";
@@ -277,6 +280,7 @@ const unsigned long DUAL_NOZZLE_SWITCH_MS = 3000;
 void startEspServer();
 void restartEspServer();
 bool isEspServerListening();
+bool isPrinterOnline();
 String normalizedModelName(const String &value);
 bool chamberFallbackAllowedForModel(const String &value);
 bool modelHasChamberSensor(const String &value);
@@ -589,6 +593,7 @@ void resetLivePrintFields() {
     pr.amsSlots[i].isOfficial = false;
   }
   printerStatusReceived = false;
+  pr.online = false;
   displayDirty = true;
 }
 
@@ -804,9 +809,12 @@ String statusJson() {
   if (pr.amsExist) {
     JsonArray amsArr = doc["ams"].to<JsonArray>();
     for (int i = 0; i < 4; ++i) {
+      // AMS 接入后固定输出 4 个槽位：未插耗材的槽位保留占位（valid=false，前端显示"空"）
+      JsonObject t = amsArr.add<JsonObject>();
+      t["id"] = i;
+      t["valid"] = pr.amsSlots[i].valid;
+      t["active"] = (pr.activeTray == i);
       if (pr.amsSlots[i].valid) {
-        JsonObject t = amsArr.add<JsonObject>();
-        t["id"] = i;
         char hex[10];
         snprintf(hex, sizeof(hex), "#%02x%02x%02x",
                  (uint8_t)(pr.amsSlots[i].trayColor >> 24),
@@ -816,7 +824,11 @@ String statusJson() {
         t["type"] = pr.amsSlots[i].trayType;
         t["remain"] = (pr.amsSlots[i].isOfficial && pr.amsSlots[i].remain >= 0 && pr.amsSlots[i].remain <= 100) ? pr.amsSlots[i].remain : -1;
         t["official"] = pr.amsSlots[i].isOfficial;
-        t["active"] = (pr.activeTray == i);
+      } else {
+        t["color"] = "";
+        t["type"] = "";
+        t["remain"] = -1;
+        t["official"] = false;
       }
     }
   }
@@ -960,6 +972,7 @@ bool selectPrinterBySerial(const String &serial) {
         pr.totalLayers = -1;
         pr.status = "prepare";
         printerStatusReceived = false;
+        pr.online = false;
         cache.baseDrawn = false;
         mqttReconnectPending = true;
       }
@@ -1095,7 +1108,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "fill='%23ffffff'/%3E%3Cpolygon points='53,13 87,13 87,55 53,39' "
         "fill='%23ffffff'/%3E%3Cpolygon points='53,45 87,61 87,107 53,107' "
         "fill='%23ffffff'/%3E%3C/svg%3E\">"));
-  client.print( F("<title>PrintSphere Lite Plus</title><style>"));
+  client.print( F("<title>PrintSquare</title><style>"));
   client.print( F("*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-"
             "system,BlinkMacSystemFont,\"SF Pro Display\",\"SF Pro "
             "Text\",\"Segoe UI\",Roboto,sans-serif}"));
@@ -1250,8 +1263,8 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F(".toast.show{opacity:1}"));
   client.print( F("</style></head><body><div class=\"container\">"));
 
-  client.print( F("<div class=\"header\"><div class=\"hdr-row\"><h1>PrintSphere Lite "
-            "Plus</h1><div class=\"lang-switch\"><button id=\"langZh\" "
+  client.print( F("<div class=\"header\"><div class=\"hdr-row\"><h1>PrintSquare"
+            "</h1><div class=\"lang-switch\"><button id=\"langZh\" "
             "onclick=\"setLang('zh')\">中文</button><button id=\"langEn\" "
             "onclick=\"setLang('en')\">English</button></div></div><p "
             "class=\"sub\">固件: "));
@@ -1532,7 +1545,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
     "'日间段':'Day slot','日间亮度':'Day brightness',"
     "'保存并推送到设备':'Save and push to device',"
     "'实时调试数据':'Live debug data','查看 JSON':'Show JSON','隐藏 JSON':'Hide JSON',"
-    "'槽位':'Slot ','外挂':'External',"
+    "'槽位':'Slot ','外挂':'External','空':'Empty',"
     "'✅ 定时已关闭并即时生效':'✅ Schedule turned off and applied immediately',"
     "'✅ 已保存并即时推送到设备！':'✅ Saved and pushed to the device!'};\n"));
   client.print(F("function norm(s){var SP=String.fromCharCode(32,9,13,10);var out='';"
@@ -1697,10 +1710,20 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "  if(d.ams&&Array.isArray(d.ams)){\n"
         "    d.ams.forEach(function(s){\n"
         "      var cls='ams-pill'+(s.active?' active':'');\n"
+        "      var tag='AMS'+(s.id+1);\n"
+        "      if(!s.valid){\n"
+        "        amsHtml+='<div class=\"'+cls+'\">'+\n"
+        "          '<span class=\"ams-dot\" style=\"background:#3a3a3c\"></span>'+\n"
+        "          '<span style=\"color:#8e8e93;font-weight:600\">'+tag+'</span>'+\n"
+        "          '<span style=\"color:#8e8e93\">'+t('空')+'</span>'+\n"
+        "          '</div>';\n"
+        "        return;\n"
+        "      }\n"
         "      var rem=(s.official&&s.remain>=0&&s.remain<=100)?(' '+s.remain+'%'):'';\n"
         "      amsHtml+='<div class=\"'+cls+'\">'+\n"
         "        '<span class=\"ams-dot\" style=\"background:'+(s.color||'#fff')+'\"></span>'+\n"
-        "        '<span style=\"color:#fff;font-weight:600\">'+(s.type||(t('槽位')+(s.id+1)))+'</span>'+\n"
+        "        '<span style=\"color:#8e8e93;font-weight:600\">'+tag+'</span>'+\n"
+        "        '<span style=\"color:#fff;font-weight:600\">'+(s.type||t('空'))+'</span>'+\n"
         "        (rem?'<span style=\"color:#8e8e93\">'+rem+'</span>':'')+\n"
         "        '</div>';\n"
         "    });\n"
@@ -1959,6 +1982,7 @@ String applyConfigBody(const String &body, int &statusCode) {
       pr.totalLayers = -1;
       pr.status = "prepare";
       printerStatusReceived = false;
+      pr.online = false;
       mqttChanged = true;
     } else {
       pr.serial = serial;
@@ -2530,7 +2554,7 @@ bool mqttReadPacket(uint8_t *headerOut, uint8_t *body, size_t bodySize,
 }
 
 bool mqttSendConnect() {
-  String clientId = String("PrintSphereLite-") + String(ESP.getChipId(), HEX);
+  String clientId = String("PrintSquare-") + String(ESP.getChipId(), HEX);
   size_t remaining = 10 + 2 + clientId.length() + 2 +
                      stored.mqttUsername.length() + 2 + stored.token.length();
   size_t pos = 0;
@@ -2703,6 +2727,8 @@ bool applyFlatToolNozzles(JsonObject print) {
 void applyPrint(JsonObject print) {
   if (print.isNull())
     return;
+  // 收到真实打印遥测 → 刷新"打印机活跃"时间戳（用于关机离线判定）
+  lastPrinterActivity = millis();
 
   static const char *const statusKeys[] = {
       "gcode_state", "print_status", "printStatus", "status",
@@ -2951,10 +2977,13 @@ void applyPrint(JsonObject print) {
   else if (!print["spdMag"].isNull())
     pr.spdMag = print["spdMag"] | 100;
 
-  if (hasToken(pr.status, "offline") || hasToken(pr.status, "disconnect")) {
-    pr.online = false;
-  } else {
+  // 无真实状态数据前不置 online：避免重启后 MQTT 一连上就把默认
+  // "prepare" 当成真实状态显示成 PREP
+  if (printerStatusReceived &&
+      !hasToken(pr.status, "offline") && !hasToken(pr.status, "disconnect")) {
     pr.online = true;
+  } else {
+    pr.online = false;
   }
   displayDirty = true;
 }
@@ -3215,7 +3244,7 @@ bool connectMqtt() {
     return true;
 
   char clientId[48];
-  snprintf(clientId, sizeof(clientId), "PrintSphereLite-%06X", ESP.getChipId());
+  snprintf(clientId, sizeof(clientId), "PrintSquare-%06X", ESP.getChipId());
   Serial.printf("Cloud MQTT connecting %s serial=%s user=%s (free heap: %u)\n",
                 stored.mqttHost.c_str(), stored.serial.c_str(),
                 stored.mqttUsername.c_str(), ESP.getFreeHeap());
@@ -3247,7 +3276,9 @@ bool connectMqtt() {
   lastMqttError = "";
   lastMqttDataReceived = millis();
   mqttReconnectDelay = MQTT_RECONNECT_INTERVAL;
-  pr.online = true;
+  // 从未收到过状态数据（刚重启/刚换打印机）时保持 offline，
+  // 避免默认 "prepare" 在无真实数据时被显示成 PREP
+  pr.online = printerStatusReceived;
   publishMqttRequest(
       "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}");
   publishMqttRequest(
@@ -5085,11 +5116,27 @@ void loop() {
         mqttSendPing();
       }
       // Silent fallback: only request if no data has been received for MQTT_REQUEST_INTERVAL (30s)
-      if (now - lastMqttDataReceived >= MQTT_REQUEST_INTERVAL &&
-          now - lastMqttRequest >= 15000) {
+      // 同样用当前 millis()：lastMqttDataReceived/lastMqttRequest 在
+      // mqttHandleIncoming() 内更新，可能比顶部 now 新，回绕会误触发请求
+      unsigned long dataAge = millis() - lastMqttDataReceived;
+      if (dataAge >= MQTT_REQUEST_INTERVAL &&
+          millis() - lastMqttRequest >= 15000) {
         requestPrinterState();
       }
     }
+  }
+
+  // 打印机关机：MQTT 连接可能还在，但收不到任何打印遥测 → 超时判离线
+  // 注意：必须用当前 millis() 计算——loop 顶部的 now 取自 mqttHandleIncoming
+  // 之前，lastPrinterActivity 可能比 now 新，now - lastPrinterActivity 会无符号
+  // 回绕成 ~42 亿，导致误判超时（每帧把 online 打回 False）
+  unsigned long activityAge = millis() - lastPrinterActivity;
+  if (pr.online && lastPrinterActivity > 0 &&
+      activityAge >= MQTT_OFFLINE_TIMEOUT) {
+    pr.online = false;
+    displayDirty = true;
+    Serial.printf("Printer silent for %lus, marking OFFLINE\n",
+                  (unsigned long)(activityAge / 1000));
   }
 
   // NTP time sync retry (every 60s if not synced)

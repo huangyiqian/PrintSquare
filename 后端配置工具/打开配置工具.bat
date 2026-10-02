@@ -16,11 +16,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Starting PrintSphere Lite setup tool...
+echo Starting PrintSquare setup tool...
 echo.
 if exist "%STATE_FILE%" del "%STATE_FILE%" >nul 2>nul
 
-start "PrintSphere Lite Backend" /min "%NODE_EXE%" "%~dp0server.js" 8795
+start "PrintSquare Backend" /min "%NODE_EXE%" "%~dp0server.js" 8795
 
 set "CONFIG_URL="
 for /l %%i in (1,1,40) do (

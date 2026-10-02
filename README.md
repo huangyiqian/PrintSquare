@@ -1,10 +1,12 @@
 [ English Version ](README_en.md) | [ 简体中文 ](README.md)
 
-# PrintSphere Lite Plus (Fork 版本)
+# PrintSquare (Fork 版本)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.31-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.31-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.32-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.32-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
+
+📦 仓库地址：[https://github.com/huangyiqian/PrintSquare](https://github.com/huangyiqian/PrintSquare)
 
 本项目为原版 [PrintSphere Lite](https://github.com/ccord34/printsphere-lite) 的增强改进版本（Fork）。基于 ESP8266EX 与 240x240 ST7789 屏幕，专为 Bambu Lab（拓竹）3D 打印机打造的桌面打印状态与 AMS 耗材监控小电视。
 
@@ -19,16 +21,18 @@
 * **BGR565 颜色校正**：适配 ST7789 屏幕，准确显示耗材颜色。
 
 ### 📊 屏幕 UI 与显示布局
-* **三套屏幕布局**：提供经典、信息面板（Dashboard）与时钟布局，均适配 240x240 ST7789 屏幕。
-* **完整打印信息**：同时展示打印进度、喷嘴温度、热床温度、仓温与预计剩余时间。
-* **显示控制**：支持 0-100% 背光亮度、无任务自动降亮，以及按 90° 步进旋转屏幕并断电保存配置。
+* **三套屏幕布局**：经典、信息面板（Dashboard）、时钟三套布局，均适配 240x240 ST7789 屏幕，可在 ESP 内置 8081 后台一键切换。
+* **完整打印信息**：同时展示打印进度、喷嘴温度、热床温度、仓温、层数与预计剩余时间。
+* **背光亮度与定时**：0-100% 手动亮度，另有日间 / 夜间分时段亮度规则（8081 后台可配置），断电保存。
+* **半透半反镜支持（镜像）**：面向 HoloCubic 风格 45° 半透半反镜装配，提供「无镜像 / 左右镜像」两档——镜面反射出的镜像无法用任何旋转角度修正，只能靠镜像功能；镜像可与 0° / 90° / 180° / 270° 旋转自由组合，在 ESP 8081 后台与桌面配置工具都能切换，写入 LittleFS、重启后自动恢复。
+* **屏幕旋转**：0° / 90° / 180° / 270° 步进旋转，断电保存；只有方向变化才清屏重绘，普通数据刷新仍是局部更新。
 * **平滑视觉效果**：使用连续渐变进度条和玻璃拟态元素，数据刷新采用局部更新以减少整屏闪烁。
 
 ### 🌐 Web 配置工具
-* **设备配置**：支持 WiFi 扫描、打印机选择与同步、屏幕布局切换、亮度和旋转设置。
+* **设备配置**：WiFi 扫描、打印机选择与同步、屏幕布局 / 亮度 / 旋转 / 镜像设置；写入优先走 USB 串口，局域网 HTTP 作为兜底。
 * **实时监控**：可查看打印状态、进度、温度、层数、剩余时间与耗材槽位。
-* **多设备管理**：按硬件标识隔离配置，并优先通过 USB 串口写入，HTTP 局域网配置作为后备。
-* **双端口访问**：设备同时支持 80 和 8081 端口的 Web 管理页面。
+* **多设备管理**：按 MAC / device_id 为每台 ESP 保存独立档案（WiFi、串口、地址、已选打印机），云账号与打印机列表共用。
+* **双端口访问**：同一个后台同时监听 80 与 8081，浏览器不输端口也能打开；日常建议访问 `http://ESP的IP:8081/`。
 * **中英文切换**：ESP 内置 8081 页面右上角可切换 中文 / English，选择会记在浏览器本地。
 
 ---
@@ -61,12 +65,13 @@
 
 ## 🚀 快速上手使用
 
-1. 使用 USB 线将 ESP8266 连接到 Windows 电脑。
-2. 打开 `后端配置工具\PrintSphere配置工具.exe`（单文件工具，双击即用），在自动打开的浏览器页面中登录 Bambu Lab 账号。
-3. 选择或填写 2.4G WiFi 名称与密码，点击 **“保存并配置 ESP WiFi”**。
-4. 刷新打印机列表，选中你的拓竹打印机并点击 **“显示这台并同步”**。
-5. ESP8266 屏幕出现数据后即可拔下电脑 USB，改用任意 5V USB 供电使用。
-6. 设备连上 WiFi 后，也可以通过浏览器直接访问 `http://[ESP的局域网IP]:8081/` 进行轻量无线管理。
+1. 到 [GitHub Release](https://github.com/huangyiqian/PrintSquare/releases) 下载最新压缩包 `PrintSquare_v<版本>_<日期>_build.zip` 并解压。
+2. 用 USB 线将 ESP8266 连接到 Windows 电脑，双击压缩包里的 `刷固件工具\一键刷入固件.bat`，按提示选择串口并完成刷机。
+3. 打开 `后端配置工具\PrintSquare配置工具.exe`（单文件工具，双击即用），在自动打开的浏览器页面中登录 Bambu Lab 账号。
+4. 选择或填写 2.4G WiFi 名称与密码，点击 **“保存并配置 ESP WiFi”**。
+5. 刷新打印机列表，选中你的拓竹打印机并点击 **“显示这台并同步”**。
+6. ESP8266 屏幕出现数据后即可拔下电脑 USB，改用任意 5V USB 供电使用。
+7. 设备连上 WiFi 后，也可以通过浏览器直接访问 `http://[ESP的局域网IP]:8081/` 进行轻量无线管理。
 
 ---
 
