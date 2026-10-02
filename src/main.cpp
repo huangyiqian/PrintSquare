@@ -179,7 +179,7 @@ struct StoredConfig {
   String alias = "";
   String layout = "classic";
   uint16_t rotation = 0;
-  uint8_t mirror = 0; // 0 = off, 1 = left/right (MX), 2 = top/bottom (MY)
+  uint8_t mirror = 0; // 0 = off, 1 = left/right (MX)
   String aliasBitmapHex = "";
   uint8_t aliasBitmapW = 0;
   uint8_t aliasBitmapH = 0;
@@ -741,7 +741,7 @@ void loadStoredConfig() {
   int savedRotation = doc["rotation"] | 0;
   stored.rotation = (savedRotation == 90 || savedRotation == 180 || savedRotation == 270) ? (uint16_t)savedRotation : 0;
   int savedMirror = doc["mirror"] | 0;
-  stored.mirror = (savedMirror == 1 || savedMirror == 2) ? (uint8_t)savedMirror : 0;
+  stored.mirror = (savedMirror == 1) ? (uint8_t)savedMirror : 0;
   stored.aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   stored.aliasBitmapW = doc["alias_bitmap_w"] | 0;
   stored.aliasBitmapH = doc["alias_bitmap_h"] | 0;
@@ -1432,10 +1432,6 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   if (currentMirror == 1)
     client.print( F(" class=\"active\""));
   client.print( F(">左右镜像</button>"));
-  client.print( F("<button id=\"mk2\" onclick=\"setMirror(2)\""));
-  if (currentMirror == 2)
-    client.print( F(" class=\"active\""));
-  client.print( F(">上下镜像</button>"));
   client.print( F("</div></div>"));
 
   client.print( F("<div class=\"paired-grid\">"));
@@ -1756,7 +1752,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
 // ---------------------------------------------------------------------------
 // Display orientation = rotation + optional mirror (beam-splitter builds).
 // A panel viewed through a 45 degree half mirror (HoloCubic style) shows a
-// mirror image, which no rotation value can undo, so the MX/MY MADCTL bit has
+// mirror image, which no rotation value can undo, so the MX MADCTL bit has
 // to be toggled. TFT_eSPI's ST7789 driver only implements rotations 0-3
 // (TFT_Drivers/ST7789_2_Rotation.h uses "rotation = m % 4"), unlike the
 // ILI9341 driver which has mirrored 4-7 cases, so MADCTL is written here again
@@ -1775,10 +1771,7 @@ void applyDisplayOrientation() {
   if (stored.mirror == 0)
     return;
   uint8_t madctl = kMadctlBase[index];
-  if (stored.mirror == 1)
-    madctl ^= TFT_MAD_MX; // left/right mirror
-  else
-    madctl ^= TFT_MAD_MY; // top/bottom mirror
+  madctl ^= TFT_MAD_MX; // left/right mirror
   tft.writecommand(TFT_MADCTL);
   tft.writedata(madctl);
 }
@@ -1927,9 +1920,7 @@ String applyConfigBody(const String &body, int &statusCode) {
     }
   }
   if (requestedMirror >= 0) {
-    uint8_t nextMirror = (requestedMirror == 1 || requestedMirror == 2)
-                             ? (uint8_t)requestedMirror
-                             : 0;
+    uint8_t nextMirror = (requestedMirror == 1) ? (uint8_t)requestedMirror : 0;
     if (stored.mirror != nextMirror) {
       stored.mirror = nextMirror;
       mirrorChanged = true;
