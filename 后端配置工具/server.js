@@ -1863,7 +1863,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
    The reserve is spent on padding, so a single line still fills the box and
    the reserved area reads as a status row instead of a hole. */
 #autoDetectLine,#wifiScanLine,#statusLine{min-height:3em;padding:9px 11px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);border-radius:10px;line-height:1.45}
-#autoDetectLine{margin-top:6px}
+#autoDetectLine{margin-top:6px;min-height:3em;max-height:3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .statusbox p{min-height:1.5em;margin:6px 0}
 #brightnessLine,#espLine{font-size:11px}
 #adminLine a{color:#0a84ff;font-weight:600;text-decoration:none;overflow-wrap:break-word;word-break:normal}
@@ -1908,6 +1908,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 const BOOT_URLS=${JSON.stringify(urls)};
 const BOOT_VERSION=${JSON.stringify(BACKEND_VERSION)};
 const $=id=>document.getElementById(id);
+/* 关闭/离开页面时通知后端自毁，立刻释放端口、串口和文件占用 */
+function tellServerGone(){try{navigator.sendBeacon("/api/client-gone")}catch(e){}}
+addEventListener("pagehide",tellServerGone);
+addEventListener("beforeunload",tellServerGone);
 /* ---------- i18n: 中文原文为 key，英文为译文 ---------- */
 const I18N={
 "PrintSphere Lite Plus 配置工具":"PrintSphere Lite Plus Setup Tool",
@@ -1940,7 +1944,7 @@ const I18N={
 "信息面板":"Dashboard","经典":"Classic","无":"off","左右":"left-right","上下":"top-bottom",
 "没有检测到串口，请确认当前要配置的 ESP 已插入 USB。":"No serial port detected. Make sure the ESP you want to configure is plugged in over USB.",
 "未检测到串口":"No serial port detected","正在检测当前 ESP...":"Detecting the current ESP...",
-"自动检测 ESP 失败。":"ESP auto-detection failed.","正在读取当前串口 ESP 身份...":"Reading the ESP identity on the current port...",
+"自动检测 ESP 失败。":"ESP auto-detection failed.","正在读取当前串口 ESP 身份...":"Reading the ESP identity on the current port...","8266未接入":"8266 not plugged in","8266未连接":"8266 not connected","已自动选择 {port} 上的 ESP。":"Auto-selected the ESP on {port}.",
 "正在写入当前 ESP：":"Writing to the current ESP: ","正在写入 ESP WiFi，随后会检测 ESP 是否连上 WiFi...":"Writing ESP WiFi, then checking whether the ESP is online...",
 "正在写入 ESP WiFi，并检测连接状态...":"Writing ESP WiFi and checking the connection...","正在保存写入设置...":"Saving settings...",
 "ESP WiFi 配置流程已完成，请查看下方日志。":"ESP WiFi setup finished. See the log below.","保存或配置 ESP WiFi 失败。":"Failed to save or configure ESP WiFi.",
@@ -2016,6 +2020,9 @@ function setLang(l){LANG=(l==="en")?"en":"zh";try{localStorage.setItem("psLang",
 const mo=new MutationObserver(function(muts){if(LANG!=="en")return;for(var i=0;i<muts.length;i++){var m=muts[i];if(m.type==="characterData"){trNode(m.target);}else{for(var j=0;j<m.addedNodes.length;j++){var nd=m.addedNodes[j];if(nd.nodeType===3)trNode(nd);else if(nd.nodeType===1)applyDom(nd);}}}});
 mo.observe(document.body,{childList:true,subtree:true,characterData:true});
 let multiEspBlocked=false;
+/* auto-detect polling must not repaint the status row on every round: we only
+   rewrite it when the state actually changes (none -> connected -> lost). */
+let autoDetectState="unknown";
 let operationBusy=false;
 let autoDetectBusy=false;
 function log(x){$("log").textContent=(typeof x==="string"?x:JSON.stringify(x,null,2));}
@@ -2042,8 +2049,8 @@ function renderSerialPorts(items){const list=$("serialList");if(!list)return;con
 function chooseSerial(){const v=$("serialList").value;if(v)$("serialPort").value=v;}
 async function activateEsp(){try{const id=$("espProfileList").value;if(!id)return;log(await api("/api/esp/activate",{method:"POST",body:JSON.stringify({id})}));await refresh();api("/api/devices").then(d=>renderDevices(d.devices||[]))}catch(e){log(e)}}
 async function readEspDevice(){try{log(t("正在读取当前串口 ESP 身份..."));log(await api("/api/esp/read-device",{method:"POST",body:JSON.stringify({serial_port:$("serialPort").value||"COM7"})}));await refresh();api("/api/devices").then(d=>renderDevices(d.devices||[]))}catch(e){log(e)}}
-function renderAutoDetect(d){const line=$("autoDetectLine");if(!line)return;const results=d&&d.results||[];multiEspBlocked=!!(d&&d.multiple_devices);if(!results.length){line.className="warn";line.textContent=t("没有检测到串口，请确认当前要配置的 ESP 已插入 USB。");return;}const ok=results.filter(x=>x.ok);const fail=results.filter(x=>!x.ok);const list=arr=>arr.map(x=>x.port+" "+(x.mac||x.active_esp_id)).join("; ");const ports=arr=>arr.map(x=>x.port).join(", ");if(multiEspBlocked){line.className="bad";line.textContent=sv(d.message)+tp(" 已识别：{list}",{list:list(ok)});return;}line.className=ok.length?"ok":"warn";line.textContent=d&&d.message?sv(d.message):(ok.length?tp("已识别 {n} 台 ESP：{list}",{n:ok.length,list:list(ok)})+(fail.length?tp("；未响应：{list}",{list:ports(fail)}):""):tp("没有串口返回 ESP 身份：{list}",{list:ports(fail)}));}
-async function autoDetectEsp(showLog){if(autoDetectBusy||(!showLog&&operationBusy))return;autoDetectBusy=true;const line=$("autoDetectLine");try{if(line){line.className="muted";line.textContent=t("正在检测当前 ESP...");}const d=await api("/api/esp/auto-detect",{method:"POST"});renderAutoDetect(d);if(showLog)log(d);await refresh();api("/api/devices").then(x=>renderDevices(x.devices||[]));}catch(e){if(line){line.className="bad";line.textContent=sv(e&&e.error)||t("自动检测 ESP 失败。");}if(showLog)log(e)}finally{autoDetectBusy=false}}
+function renderAutoDetect(d){const line=$("autoDetectLine");if(!line)return;const results=d&&d.results||[];multiEspBlocked=!!(d&&d.multiple_devices);const ok=results.filter(x=>x.ok);const fail=results.filter(x=>!x.ok);const list=arr=>arr.map(x=>x.port+" "+(x.mac||x.active_esp_id)).join("; ");const ports=arr=>arr.map(x=>x.port).join(", ");let cls,txt;if(!results.length||!ok.length){cls="bad";txt=autoDetectState==="connected"?t("8266未连接"):t("8266未接入");autoDetectState="lost";}else if(multiEspBlocked){cls="bad";autoDetectState="connected";txt=sv(d.message)+tp(" 已识别：{list}",{list:list(ok)});}else{cls="ok";autoDetectState="connected";txt=d&&d.message?sv(d.message):(ok.length>1?tp("已识别 {n} 台 ESP：{list}",{n:ok.length,list:list(ok)}):tp("已自动选择 {port} 上的 ESP。",{port:ok[0].port}))+(fail.length?tp("；未响应：{list}",{list:ports(fail)}):"");}if(line.className===cls&&line.textContent===txt)return;line.className=cls;line.textContent=txt;}
+async function autoDetectEsp(showLog){if(autoDetectBusy||(!showLog&&operationBusy))return;autoDetectBusy=true;const line=$("autoDetectLine");try{if(line&&showLog){line.className="muted";line.textContent=t("正在检测当前 ESP...");}const d=await api("/api/esp/auto-detect",{method:"POST"});renderAutoDetect(d);if(showLog)log(d);await refresh();api("/api/devices").then(x=>renderDevices(x.devices||[]));}catch(e){if(line&&showLog){line.className="bad";line.textContent=sv(e&&e.error)||t("自动检测 ESP 失败。");}if(showLog)log(e)}finally{autoDetectBusy=false}}
 function renderWifiNetworks(networks){const list=$("wifiList");if(!list)return;const current=String($("wifiSsid").value||"");const opts=['<option value="">'+esc(t("请选择扫描到的 WiFi，或在下方手动输入"))+'</option>'];(networks||[]).forEach(n=>{const ssid=String(n.ssid||"");const label=ssid+(n.signal?tp("（{n}%）",{n:n.signal}):"");opts.push("<option value='"+esc(ssid)+"'"+(ssid===current?" selected":"")+">"+esc(label)+"</option>")});list.innerHTML=opts.join("");}
 function chooseWifi(){const v=$("wifiList").value;if(v){$("wifiSsid").value=v;$("wifiPassword").focus();}}
 async function scanWifi(showLog){const line=$("wifiScanLine");if(line){line.className="muted";line.textContent=t("正在通过 USB 串口让 ESP 扫描附近 WiFi...");}try{const d=await api("/api/wifi/networks?serial_port="+encodeURIComponent($("serialPort").value||"COM7"));renderWifiNetworks(d.networks||[]);if(line){const ok=(d.networks||[]).length>0;line.className=ok?"ok":"warn";line.textContent=sv(d.message)||(ok?tp("已扫描到 {n} 个 WiFi，可选择或手动输入。",{n:d.networks.length}):t("未扫描到 WiFi，可手动输入。"));}if(showLog)log(d)}catch(e){renderWifiNetworks([]);if(line){line.className="warn";line.textContent=sv(e&&e.error)||t("扫描失败，可手动输入 WiFi 名称。");}if(showLog)log(e)}}
@@ -2053,7 +2060,7 @@ async function syncPrinterList(){try{const body={host:$("espHost").value,port:Nu
 async function renderDevices(devs){const c=await api("/api/config");const disabled=!c.steps.ready_to_select_printer||multiEspBlocked;let warn="";if(disabled)warn='<p class="warn">'+esc(multiEspBlocked?t("当前同时连接了多台 ESP，请只保留当前要配置的一台。"):(!c.steps.esp_ready?t("请先连接一台 ESP，并点击“检测当前 ESP”。"):t("请先完成第 1 步登录和第 2 步 WiFi 保存，再选择打印机。")))+'</p>';$("devices").innerHTML=warn+'<table><tr><th>'+esc(t("名称"))+'</th><th>'+esc(t("型号"))+'</th><th>'+esc(t("序列号"))+'</th><th>'+esc(t("状态"))+'</th><th></th></tr>'+devs.map(d=>'<tr><td>'+esc(d.display_name)+'</td><td>'+esc(d.model)+'</td><td>'+esc(d.serial)+'</td><td>'+esc(d.print_status||"")+'</td><td><button class="selectPrinterBtn" data-serial="'+esc(d.serial)+'" data-esp="'+esc(c.active_esp_id||'')+'" data-port="'+esc(c.esp.serial_port||'')+'" '+(disabled?'disabled':'')+'>'+esc(t("显示这台并同步"))+'</button></td></tr>').join("")+'</table>';document.querySelectorAll(".selectPrinterBtn").forEach(b=>{b.onclick=()=>selectPrinter(b.dataset.serial,b.dataset.esp,b.dataset.port);});}
 function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#39;"}[c]))}
 async function selectPrinter(serial,active_esp_id,serial_port){try{log(t("正在写入当前 ESP：")+(active_esp_id||"--")+" / "+(serial_port||"--"));log(await api("/api/printer/select",{method:"POST",body:JSON.stringify({serial,active_esp_id,serial_port})}));await refresh()}catch(e){log(e)}}
-async function initialize(){renderChrome();applyDom();await refresh();await loadPorts(true);await scanWifi(false);api("/api/devices").then(d=>renderDevices(d.devices||[]))}initialize();setInterval(refresh,5000);setInterval(()=>{if(document.visibilityState==="visible")autoDetectEsp(false)},8000);
+async function initialize(){renderChrome();applyDom();await refresh();await loadPorts(true);autoDetectEsp(false);await scanWifi(false);api("/api/devices").then(d=>renderDevices(d.devices||[]))}initialize();setInterval(refresh,5000);setInterval(()=>{if(document.visibilityState==="visible")autoDetectEsp(false)},8000);
 </script></body></html>`;
 }
 
@@ -2075,10 +2082,44 @@ function publicError(error) {
   return message;
 }
 
+/* The companion lives exactly as long as a page talks to it: the page posts
+   /api/client-gone when its tab goes away (pagehide/beforeunload) so closing
+   the browser frees the port, serial and data files within a few seconds.
+   The idle timeout is the fallback for a crashed or force-killed browser. */
+const CLIENT_GONE_GRACE_MS = Number(process.env.PSPHERE_GONE_MS || 4000);
+const IDLE_SHUTDOWN_MS = Number(process.env.PSPHERE_IDLE_MS || 300000);
+let lastRequestAt = Date.now();
+let clientGoneAt = 0;
+let shuttingDown = false;
+
+function shutdownFor(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  setTimeout(() => {
+    try { server.close(); } catch (error) { /* already closed */ }
+    try { fs.rmSync(SERVER_STATE_FILE, { force: true }); } catch (error) { /* 交给下次启动清理 */ }
+    console.log(`${reason}，配置工具退出：端口 ${PORT} 与文件占用已释放。`);
+    process.exit(0);
+  }, 250);
+}
+
+setInterval(() => {
+  if (shuttingDown) return;
+  const now = Date.now();
+  if (clientGoneAt && now - clientGoneAt >= CLIENT_GONE_GRACE_MS) return shutdownFor("配置页面已关闭");
+  if (!clientGoneAt && now - lastRequestAt >= IDLE_SHUTDOWN_MS) return shutdownFor(`${Math.round(IDLE_SHUTDOWN_MS / 1000)} 秒无页面访问`);
+}, 1000);
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    lastRequestAt = Date.now();
+    if (url.pathname !== "/api/client-gone") clientGoneAt = 0;
     if (req.method === "OPTIONS") return send(res, 204, {});
+    if (req.method === "POST" && url.pathname === "/api/client-gone") {
+      clientGoneAt = Date.now();
+      return send(res, 204, {});
+    }
     if (req.method === "GET" && url.pathname === "/") return send(res, 200, html(), "text/html");
     if (req.method === "GET" && url.pathname === "/api/version") return send(res, 200, { version: BACKEND_VERSION, changes: CHANGELOG, urls: serviceUrls() });
     if (req.method === "GET" && url.pathname === "/api/config") return send(res, 200, publicConfig());
