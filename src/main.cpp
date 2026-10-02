@@ -18,7 +18,7 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.30";
+const char *FIRMWARE_VERSION = "firmware-v0.5.31";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000
@@ -1112,6 +1112,18 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "100%);-webkit-background-clip:text;-webkit-text-fill-color:"
             "transparent}"));
   client.print( F(".header .sub{color:#8e8e93;font-size:14px;margin-top:4px}"));
+  client.print( F(".hdr-row{display:flex;justify-content:space-between;align-items:"
+            "center;gap:12px;flex-wrap:wrap}"));
+  client.print( F(".lang-switch{display:flex;background:rgba(0,0,0,0.3);padding:3px;"
+            "border-radius:12px;border:1px solid rgba(255,255,255,0.08);gap:4px;"
+            "flex:0 0 auto}"));
+  client.print( F(".lang-switch button{padding:6px 14px;border:none;border-radius:9px;"
+            "background:transparent;color:#98989d;font-size:13px;font-weight:500;"
+            "cursor:pointer;box-shadow:none;transition:all .2s ease}"));
+  client.print( F(".lang-switch button.active{background:rgba(255,255,255,0.2);color:"
+            "#ffffff;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,0.25)}"));
+  client.print( F(".lang-switch button:hover{background:rgba(255,255,255,0.12);color:"
+            "#ffffff}"));
   client.print( F(".grid{display:grid;grid-template-columns:1fr;gap:16px}@media(min-"
             "width:640px){.grid{grid-template-columns:repeat(2,1fr)}}"));
   client.print( F(".paired-grid{display:grid;grid-template-columns:1fr;gap:16px;grid-column:1 / -1}"
@@ -1238,7 +1250,10 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F(".toast.show{opacity:1}"));
   client.print( F("</style></head><body><div class=\"container\">"));
 
-  client.print( F("<div class=\"header\"><h1>PrintSphere Lite Plus</h1><p "
+  client.print( F("<div class=\"header\"><div class=\"hdr-row\"><h1>PrintSphere Lite "
+            "Plus</h1><div class=\"lang-switch\"><button id=\"langZh\" "
+            "onclick=\"setLang('zh')\">中文</button><button id=\"langEn\" "
+            "onclick=\"setLang('en')\">English</button></div></div><p "
             "class=\"sub\">固件: "));
   client.print( FIRMWARE_VERSION);
   client.print( F(" | IP: "));
@@ -1493,6 +1508,73 @@ void sendEspHomeHtml(WiFiClient &realClient) {
 
   // JavaScript
   client.print( F("<script>\n"));
+  // ---- i18n: 中文原文为 key，英文为译文（与桌面配置工具同一套写法）----
+  client.print(F("/* ---------- i18n ---------- */\n"));
+  client.print(F("const I18N={'固件:':'Firmware:','打印机实时状态':'Printer live status',"
+    "'离线':'Offline','打印中':'Printing','准备中':'Preparing','已暂停':'Paused',"
+    "'已完成':'Done','待机':'Standby','异常中断':'Failed','待机中':'Idle','空闲':'Standby',"
+    "'任务进度':'Progress','即将完成':'Finishing soon',"
+    "'⏱ 剩余时间':'⏱\\uFE0F Time left','📑 打印层数':'📑\\uFE0F Layers',"
+    "'🌡 喷嘴温度':'🌡\\uFE0F Nozzle temp','🛏 热床温度':'🛏\\uFE0F Bed temp',"
+    "'📦 机箱温度':'📦\\uFE0F Chamber temp','⚡ 打印速度':'⚡\\uFE0F Speed',"
+    "'🧵 耗材状态':'🧵\\uFE0F Filament status',"
+    "'静音 (50%)':'Silent (50%)','标准 (100%)':'Standard (100%)',"
+    "'运动 (124%)':'Sport (124%)','狂暴 (166%)':'Ludicrous (166%)',"
+    "'静音':'Silent','标准':'Standard','运动':'Sport','狂暴':'Ludicrous',"
+    "'设备状态':'Device status','打印机':'Printer','未选择':'Not selected','机型':'Model',"
+    "'状态':'Status','已连接':'Connected','未连接':'Disconnected',"
+    "'屏幕亮度':'Brightness','拖动实时应用背光':'Drag to apply the backlight live',"
+    "'显示目前屏幕实时亮度（已启用定时规则）':'Shows the current screen brightness (schedule rule on)',"
+    "'屏幕布局':'Screen layout','经典':'Classic','面板':'Dashboard','时钟':'Clock',"
+    "'屏幕旋转':'Rotation','屏幕镜像（半透半反镜用）':'Mirror (for half-mirror builds)',"
+    "'无':'Off','左右镜像':'Left-right mirror',"
+    "'亮度定时':'Brightness schedule','夜间段':'Night slot','夜间亮度':'Night brightness',"
+    "'日间段':'Day slot','日间亮度':'Day brightness',"
+    "'保存并推送到设备':'Save and push to device',"
+    "'实时调试数据':'Live debug data','查看 JSON':'Show JSON','隐藏 JSON':'Hide JSON',"
+    "'槽位':'Slot ','外挂':'External',"
+    "'✅ 定时已关闭并即时生效':'✅ Schedule turned off and applied immediately',"
+    "'✅ 已保存并即时推送到设备！':'✅ Saved and pushed to the device!'};\n"));
+  client.print(F("function norm(s){var SP=String.fromCharCode(32,9,13,10);var out='';"
+    "var prev=false;for(var i=0;i<s.length;i++){var c=s.charAt(i);"
+    "if(c==='\\uFE0F')continue;if(SP.indexOf(c)>=0){if(!prev){out+=' ';prev=true;}}"
+    "else{out+=c;prev=false;}}return out.trim();}\n"
+    "for(const k in I18N){const nk=norm(k);if(nk!==k){I18N[nk]=I18N[k];delete I18N[k];}}\n"
+    "const REV={};for(const k in I18N){const v=norm(I18N[k]);if(!REV[v])REV[v]=k;}\n"
+    "let LANG=(function(){try{var s=localStorage.getItem('psLang');if(s==='zh'||s==='en')return s;}catch(e){}"
+    "return ((navigator.language||'').toLowerCase().indexOf('en')===0)?'en':'zh';})();\n"
+    "function t(s){if(LANG==='zh'||!s)return s;return I18N[norm(s)]||s;}\n"));
+  client.print(F("function trNode(node){if(!node||node.nodeType!==3)return;var raw=node.nodeValue;if(!raw)return;"
+    "var core=norm(raw);if(!core)return;var next=(LANG==='en')?I18N[core]:REV[core];if(!next)return;"
+    "var SP=String.fromCharCode(32,9,13,10);var a=0,b=raw.length;"
+    "while(a<b&&SP.indexOf(raw.charAt(a))>=0)a++;while(b>a&&SP.indexOf(raw.charAt(b-1))>=0)b--;"
+    "var out=raw.slice(0,a)+next+raw.slice(b);if(out!==raw)node.nodeValue=out;}\n"
+    "function fixMixedText(){var sub=document.querySelector('.header .sub');"
+    "if(sub&&sub.firstChild&&sub.firstChild.nodeType===3){var v=sub.firstChild.nodeValue;"
+    "if(LANG==='en'){if(v.indexOf('固件:')===0)sub.firstChild.nodeValue='Firmware:'+v.slice(3);}"
+    "else{if(v.indexOf('Firmware:')===0)sub.firstChild.nodeValue='固件:'+v.slice(9);}}"
+    "var rem=document.getElementById('pRemain');"
+    "if(rem&&LANG==='en'){var s=rem.textContent;"
+    "s=s.replace(/([0-9]+)\\s*小时\\s*/g,'$1h ').replace(/([0-9]+)分钟/g,'$1min')"
+    ".replace(/([0-9]+)分/g,'$1m');if(s!==rem.textContent)rem.textContent=s;}}\n"
+    "function applyDom(root){var scope=root&&root.nodeType===1?root:document.body;"
+    "var w=document.createTreeWalker(scope,NodeFilter.SHOW_TEXT,null);var n;"
+    "while((n=w.nextNode()))trNode(n);fixMixedText();}\n"));
+  client.print(F("function renderLangBtns(){['langZh','langEn'].forEach(function(id){var el=document.getElementById(id);"
+    "if(el)el.className=(id===(LANG==='en'?'langEn':'langZh'))?'active':'';});}\n"
+    "function syncJsonBtn(){var b=document.querySelector('.debug-card .btn-action'),l=document.getElementById('log');"
+    "if(!b||!l)return;b.textContent=(l.style.display==='block')?t('隐藏 JSON'):t('查看 JSON');}\n"
+    "function setLang(l){LANG=(l==='en')?'en':'zh';try{localStorage.setItem('psLang',LANG);}catch(e){}"
+    "document.documentElement.lang=(LANG==='en')?'en':'zh-CN';renderLangBtns();applyDom(document.body);"
+    "if(lastData)renderStatus(lastData);else refreshStatus();updateManualBrightnessState();syncJsonBtn();}\n"
+    "function initLang(){document.documentElement.lang=(LANG==='en')?'en':'zh-CN';"
+    "renderLangBtns();applyDom(document.body);}\n"
+    "const mo=new MutationObserver(function(muts){if(LANG!=='en')return;"
+    "for(var i=0;i<muts.length;i++){var m=muts[i];"
+    "if(m.type==='characterData'){trNode(m.target);}else{"
+    "for(var j=0;j<m.addedNodes.length;j++){var nd=m.addedNodes[j];"
+    "if(nd.nodeType===3)trNode(nd);else if(nd.nodeType===1)applyDom(nd);}}}});\n"
+    "mo.observe(document.body,{childList:true,subtree:true,characterData:true});\n"));
   client.print(F("const savedSchedule = "));
   {
     String sched = stored.brightnessSchedule;
@@ -1513,9 +1595,9 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "hint=document.getElementById('brHint');\n"));
   client.print( F("  if(!hint)return;\n"));
   client.print( F("  if(c&&c.checked){\n"));
-  client.print( F("    hint.textContent='显示目前屏幕实时亮度（已启用定时规则）';\n"));
+  client.print( F("    hint.textContent=t('显示目前屏幕实时亮度（已启用定时规则）');\n"));
   client.print( F("  }else{\n"));
-  client.print( F("    hint.textContent='拖动实时应用背光';\n"));
+  client.print( F("    hint.textContent=t('拖动实时应用背光');\n"));
   client.print( F("  }\n"));
   client.print( F("}\n"));
   client.print( F("function initScheduleUI(){\n"));
@@ -1539,30 +1621,31 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F("  }\n"));
   client.print( F("  updateManualBrightnessState();\n"));
   client.print( F("}\n"));
-  client.print( F("window.addEventListener('DOMContentLoaded', function(){initScheduleUI();refreshStatus();});\n"));
+  client.print( F("window.addEventListener('DOMContentLoaded', function(){initLang();initScheduleUI();refreshStatus();});\n"));
 
   client.print(
       F("function fmtSt(st,prg,on){\n"
-        "  if(!on)return{t:'离线',c:'badge muted'};\n"
+        "  if(!on)return{t:t('离线'),c:'badge muted'};\n"
         "  st=(st||'').toLowerCase();\n"
-        "  if(st==='running'||st==='printing')return{t:'打印中',c:'badge ok'};\n"
-        "  if(st==='prepare'||st==='preparing'||st==='heatbed'||st==='homing')return{t:'准备中',c:'badge info'};\n"
-        "  if(st==='pause'||st==='paused')return{t:'已暂停',c:'badge warn'};\n"
-        "  if(st==='finish'||st==='finished'||st==='done'||prg>=100)return{t:'已完成',c:'badge ok'};\n"
-        "  if(st==='failed'||st==='error')return{t:'异常中断',c:'badge err'};\n"
-        "  if(st==='idle')return{t:'待机中',c:'badge muted'};\n"
-        "  return{t:st?st.toUpperCase():'空闲',c:'badge muted'};\n"
+        "  if(st==='running'||st==='printing')return{t:t('打印中'),c:'badge ok'};\n"
+        "  if(st==='prepare'||st==='preparing'||st==='heatbed'||st==='homing')return{t:t('准备中'),c:'badge info'};\n"
+        "  if(st==='pause'||st==='paused')return{t:t('已暂停'),c:'badge warn'};\n"
+        "  if(st==='finish'||st==='finished'||st==='done'||prg>=100)return{t:t('已完成'),c:'badge ok'};\n"
+        "  if(st==='failed'||st==='error')return{t:t('异常中断'),c:'badge err'};\n"
+        "  if(st==='idle')return{t:t('待机中'),c:'badge muted'};\n"
+        "  return{t:st?st.toUpperCase():t('空闲'),c:'badge muted'};\n"
         "}\n"
         "function fmtSpd(lvl,mag){\n"
-        "  var n='标准';\n"
-        "  if(lvl===1)n='静音';else if(lvl===3)n='运动';else if(lvl===4)n='狂暴';\n"
+        "  var n=t('标准');\n"
+        "  if(lvl===1)n=t('静音');else if(lvl===3)n=t('运动');else if(lvl===4)n=t('狂暴');\n"
         "  return mag>0?n+' ('+mag+'%)':n;\n"
         "}\n"
         "function fmtRem(m,st,prg){\n"
-        "  if(st==='finish'||prg>=100)return '已完成';\n"
+        "  if(st==='finish'||prg>=100)return t('已完成');\n"
         "  if(m===undefined||m<0)return '--';\n"
-        "  if(m===0)return '即将完成';\n"
+        "  if(m===0)return t('即将完成');\n"
         "  var h=Math.floor(m/60),rm=m%60;\n"
+        "  if(LANG==='en')return h>0?(h+'h '+rm+'m'):(rm+'min');\n"
         "  return h>0?(h+'小时 '+rm+'分'):(rm+'分钟');\n"
         "}\n"
         "function hasChamber(m){\n"
@@ -1617,7 +1700,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "      var rem=(s.official&&s.remain>=0&&s.remain<=100)?(' '+s.remain+'%'):'';\n"
         "      amsHtml+='<div class=\"'+cls+'\">'+\n"
         "        '<span class=\"ams-dot\" style=\"background:'+(s.color||'#fff')+'\"></span>'+\n"
-        "        '<span style=\"color:#fff;font-weight:600\">'+(s.type||('槽位'+(s.id+1)))+'</span>'+\n"
+        "        '<span style=\"color:#fff;font-weight:600\">'+(s.type||(t('槽位')+(s.id+1)))+'</span>'+\n"
         "        (rem?'<span style=\"color:#8e8e93\">'+rem+'</span>':'')+\n"
         "        '</div>';\n"
         "    });\n"
@@ -1627,7 +1710,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "    var remExt=(d.ext.official&&d.ext.remain>=0&&d.ext.remain<=100)?(' '+d.ext.remain+'%'):'';\n"
         "    amsHtml+='<div class=\"'+clsExt+'\">'+\n"
         "      '<span class=\"ams-dot\" style=\"background:'+(d.ext.color||'#fff')+'\"></span>'+\n"
-        "      '<span style=\"color:#fff;font-weight:600\">外挂 '+(d.ext.type||'')+'</span>'+\n"
+        "      '<span style=\"color:#fff;font-weight:600\">'+t('外挂')+' '+(d.ext.type||'')+'</span>'+\n"
         "      (remExt?'<span style=\"color:#8e8e93\">'+remExt+'</span>':'')+\n"
         "      '</div>';\n"
         "  }\n"
@@ -1636,8 +1719,9 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "    if(amsHtml){as.innerHTML=amsHtml;ab.style.display='block';}else{ab.style.display='none';}\n"
         "  }\n"
         "}\n"
-        "function refreshStatus(){\n"
-        "  fetch('/api/status',{cache:'no-store'}).then(r=>r.json()).then(d=>{\n"
+        "let lastData=null;\n"
+        "function renderStatus(d){\n"
+        "  lastData=d;\n"
         "    let l=document.getElementById('log');if(l&&l.style.display==='block')l.textContent=JSON.stringify(d,null,2);\n"
         "    if(d.brightness!==undefined){\n"
         "      var br=document.getElementById('br'),bv=document.getElementById('bv');\n"
@@ -1656,7 +1740,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "    }\n"
         "    if(d.mqtt_connected!==undefined){\n"
         "      var mq=document.getElementById('stMqtt');\n"
-        "      if(mq)mq.innerHTML=d.mqtt_connected?'<span class=\"badge ok\">已连接</span>':'<span class=\"badge err\">未连接</span>';\n"
+        "      if(mq)mq.innerHTML=d.mqtt_connected?'<span class=\"badge ok\">'+t('已连接')+'</span>':'<span class=\"badge err\">'+t('未连接')+'</span>';\n"
         "    }\n"
         "    if(d.layout){\n"
         "      var idx=['classic','dashboard','clock'].indexOf(d.layout);\n"
@@ -1676,15 +1760,17 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "      var mirrorBtn=document.getElementById('mk'+mirror);if(mirrorBtn)mirrorBtn.classList.add('active');\n"
         "    }\n"
         "    updatePrinterUI(d);\n"
-        "  }).catch(e=>{});\n"
+        "}\n"
+        "function refreshStatus(){\n"
+        "  fetch('/api/status',{cache:'no-store'}).then(r=>r.json()).then(renderStatus).catch(e=>{});\n"
         "}\n"
         "setInterval(function(){if(!document.hidden)refreshStatus();},5000);\n"));
   client.print(
       F("function toggleJson(btn){const "
         "el=document.getElementById('log');if(el.style.display==='none'||!el."
         "style.display){el.style.display='block';refreshStatus();btn."
-        "textContent='隐藏 "
-        "JSON'}else{el.style.display='none';btn.textContent='查看 JSON'}}\n"));
+        "textContent=t('隐藏 JSON')"
+        "}else{el.style.display='none';btn.textContent=t('查看 JSON')}}\n"));
   client.print( F("function postConfig(data){\n"
                   "  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})\n"
                   "  .then(r=>r.json()).then(d=>{if(d&&d.ok)refreshStatus();})\n"
@@ -1716,7 +1802,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F("  var s=document.getElementById('bse');\n"));
   client.print( F("  if(!s.checked){\n"));
   client.print( F("    postConfig({brightness_schedule:''});\n"));
-  client.print( F("    if(notify) showToast('✅ 定时已关闭并即时生效');\n"));
+  client.print( F("    if(notify) showToast(t('✅ 定时已关闭并即时生效'));\n"));
   client.print( F("    return;\n"));
   client.print( F("  }\n"));
   client.print( F("  var slots=[];\n"));
@@ -1733,7 +1819,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   client.print( F("    }\n"));
   client.print( F("  }\n"));
   client.print( F("  postConfig({brightness_schedule:JSON.stringify(slots)});\n"));
-  client.print( F("  if(notify) showToast('✅ 已保存并即时推送到设备！');\n"));
+  client.print( F("  if(notify) showToast(t('✅ 已保存并即时推送到设备！'));\n"));
   client.print( F("}\n"));
   client.print( F("document.querySelectorAll('#schedFields "
             "input').forEach(function(el){\n"));
