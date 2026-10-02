@@ -1,7 +1,7 @@
 // ===========================================================================
 // launcher.js — 单文件 exe 的入口（Node SEA Single Executable Application）
 //
-// 打包后（PrintSphere配置工具.exe）：
+// 打包后（PrintSquare配置工具.exe）：
 //   * 后端代码 server.js 以 SEA asset 的形式嵌在 exe 内部，不落地
 //   * data/ 目录定位到 exe 所在目录（通过 PSPHERE_BASE_DIR 传给 server.js）
 //   * 自动清理上次的 server-state.json，等服务起来后用默认浏览器打开配置页
@@ -82,7 +82,7 @@ function waitForUrlThenOpen() {
 }
 
 console.log("============================================================");
-console.log(" PrintSphere Lite 配置工具（单文件版）");
+console.log(" PrintSquare 配置工具（单文件版）");
 console.log(` 工作目录：${baseDir}`);
 console.log(" 配置完成后可直接关闭本窗口，后端服务会一并退出。");
 console.log("============================================================");

@@ -1,5 +1,5 @@
 // ============================================================
-// SD2 PrintSphere Lite - ESP8266 Bambu Cloud MQTT display
+// SD2 PrintSquare - ESP8266 Bambu Cloud MQTT display
 // ============================================================
 
 #ifndef CONFIG_H
@@ -14,6 +14,8 @@
 #define MQTT_BUFFER_SIZE 12288
 #define MQTT_RECONNECT_INTERVAL 3000
 #define MQTT_REQUEST_INTERVAL 30000
+// MQTT 连接正常但连续 90s 收不到打印机遥测数据（打印机关机）→ 判定离线
+#define MQTT_OFFLINE_TIMEOUT 90000
 
 #define DISPLAY_REFRESH 350
 

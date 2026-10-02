@@ -5,10 +5,19 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.31";
+const BACKEND_VERSION = "backend-v0.5.32";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
+    changes: [
+      "项目正式更名 PrintSquare：发布包前缀、配置工具 exe、固件 bin、屏幕与网页标题、MQTT clientId 前缀统一改用 PrintSquare",
+      "README 功能介绍重写：删去未实现的「无任务自动降亮」，补充半透半反镜（无 / 左右镜像）说明，双端口描述改为「同一后台同时监听 80 与 8081」",
+      "快速上手流程改为：先到 GitHub Release 下载最新压缩包，再用包内「一键刷入固件.bat」刷机，然后用配置工具完成 WiFi 与打印机选择",
+      "统一版本到 v0.5.32，同步固件、后端与中英文 README 徽章"
+    ]
+  },
+  {
+    version: "backend-v0.5.31",
     changes: [
       "ESP 内置 8081 后台新增中英文切换：页面右上角「中文 / English」一键切换整页，风格与本工具一致",
       "语言选择保存在浏览器本地（localStorage psLang）并跨会话保持，首次打开跟随浏览器语言",
@@ -1149,7 +1158,7 @@ async function localRequestReliable(url, method, body, timeoutMs = 1500) {
 function isUsableEspStatus(result) {
   const json = result && result.json;
   if (!result || !result.status || !json || json.ok !== true) return false;
-  return String(json.ap_ssid || "").startsWith("PrintSphereLite-") || Object.prototype.hasOwnProperty.call(json, "mqtt_connected");
+  return String(json.ap_ssid || "").startsWith("PrintSquare-") || Object.prototype.hasOwnProperty.call(json, "mqtt_connected");
 }
 
 function isWifiConfiguredStatus(json) {
@@ -1777,7 +1786,7 @@ function html() {
   const urls = serviceUrls();
   const urlLine = urls.length > 1 ? `电脑本机：${urls[0]}　手机同 WiFi：${urls.slice(1).join(" 或 ")}` : `电脑本机：${urls[0]}`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PrintSphere Lite Plus 配置工具</title><style>
+<title>PrintSquare 配置工具</title><style>
 body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f7f8;color:#1f2933}
 main{max-width:1080px;margin:0 auto;padding:24px}h1{font-size:24px;margin:0 0 18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 section{background:white;border:1px solid #dde2e7;border-radius:8px;padding:18px}section h2{margin:0 0 16px;font-size:22px}.block{border-top:1px solid #edf0f2;padding-top:14px;margin-top:14px}.block:first-of-type{border-top:0;padding-top:0;margin-top:0}.block-title{font-size:14px;font-weight:700;color:#1f2933;margin:0 0 8px}
@@ -1880,7 +1889,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 #adminHint{margin-top:0}
 .adminhint{font-size:12px;color:#8e8e93}
 @media(max-width:760px){.grid,.fieldrow,.formgrid{grid-template-columns:1fr}.grid{grid-template-columns:minmax(0,1fr)}.grid>section:nth-child(1),.grid>section:nth-child(2),.grid>section:nth-child(3),.grid>section:nth-child(4){grid-column:auto;grid-row:auto}main{padding:0}.steps{grid-template-columns:1fr}.topbar{flex-direction:column}.fieldrow button{margin-top:0}}
-</style></head><body><main><div class="topbar"><div><h1>PrintSphere Lite Plus 配置工具</h1><p class="sub" id="urlLine"></p></div><div class="lang-switch"><button id="langZh" onclick="setLang('zh')">中文</button><button id="langEn" onclick="setLang('en')">English</button></div></div>
+</style></head><body><main><div class="topbar"><div><h1>PrintSquare 配置工具</h1><p class="sub" id="urlLine"></p></div><div class="lang-switch"><button id="langZh" onclick="setLang('zh')">中文</button><button id="langEn" onclick="setLang('en')">English</button></div></div>
 <div class="steps">
 <div id="stepCloud" class="step"><b>1. Bambu 云服务登录</b><span>先获取账号 token</span></div>
 <div id="stepWifi" class="step"><b>2. 配置 ESP WiFi</b><span>写入并检测 ESP</span></div>
@@ -1923,7 +1932,7 @@ addEventListener("pagehide",tellServerGone);
 addEventListener("beforeunload",tellServerGone);
 /* ---------- i18n: 中文原文为 key，英文为译文 ---------- */
 const I18N={
-"PrintSphere Lite Plus 配置工具":"PrintSphere Lite Plus Setup Tool",
+"PrintSquare 配置工具":"PrintSquare Setup Tool",
 "1. Bambu 云服务登录":"1. Bambu Cloud login","先获取账号 token":"Get the account token first",
 "2. 配置 ESP WiFi":"2. Configure ESP WiFi","写入并检测 ESP":"Write settings and detect the ESP",
 "3. 选择显示打印机":"3. Select display printer","最后写入云 MQTT 配置":"Finally write the cloud MQTT config",
@@ -2219,7 +2228,7 @@ function listenWithFallback(port) {
   });
   server.once("listening", () => {
     writeServerState();
-    console.log(`PrintSphere Lite 配置工具已启动: http://127.0.0.1:${PORT}/`);
+    console.log(`PrintSquare 配置工具已启动: http://127.0.0.1:${PORT}/`);
     for (const item of serviceUrls().filter((item) => !item.includes("127.0.0.1"))) console.log(`局域网访问地址: ${item}`);
   });
   server.listen(PORT, "0.0.0.0");

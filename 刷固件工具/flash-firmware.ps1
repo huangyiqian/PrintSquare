@@ -105,15 +105,16 @@ function Select-Firmware($defaultFirmware, $firmwareDir) {
   return $dialog.FileName
 }
 
-Write-Title "PrintSphere Lite 一键刷固件工具"
+Write-Title "PrintSquare 一键刷固件工具"
 Write-Host "适用硬件：ESP8266EX / NodeMCU / CH340G 串口模块"
-Write-Host "烧录过程会清空 ESP 中保存的 WiFi、Bambu token 和打印机选择。"
+Write-Host "默认只写入固件，保留 ESP 中已保存的 WiFi、Bambu token 和打印机选择。"
+Write-Host "仅在需要彻底清空配置时，才在刷入前选择全擦 Flash。"
 
 $tool = Join-Path $PSScriptRoot "tools\esptool.exe"
 $driverDir = Join-CnPath $PSScriptRoot @(0x9A71, 0x52A8)
 $driver = Join-Path $driverDir "CH341SER.EXE"
 $firmwareDir = Join-CnPath (Join-Path $PSScriptRoot "..") @(0x56FA, 0x4EF6)
-$defaultFirmware = Join-Path $firmwareDir "printsphere-lite-esp8266.bin"
+$defaultFirmware = Join-Path $firmwareDir "printsquare-esp8266.bin"
 
 if (-not (Test-Path -LiteralPath $tool)) {
   Write-Host "未找到烧录工具：$tool" -ForegroundColor Red
@@ -150,16 +151,31 @@ Write-Host "将使用串口：$port"
 
 Write-Title "4. 开始烧录"
 Write-Host "请确认 ESP 已通过 USB 连接电脑。"
-Read-Host "按回车开始擦除并刷入固件"
+Write-Host ""
+Write-Host "请选择是否全擦 Flash（清空整个闪存）：" -ForegroundColor Cyan
+Write-Host "  ① 全部擦除（输入 E）：以下情况使用——"
+Write-Host "     * 这块 ESP8266 当前刷的不是 PrintSquare 固件"
+Write-Host "     * 上次刷写过程出现问题（固件异常、花屏、反复重启等）"
+Write-Host "     * 不想保留 WiFi 凭据、屏幕旋转配置、拓竹账户登录 token，想彻底重来"
+Write-Host "  ② 不全部擦除（直接回车）：仅升级固件时使用，"
+Write-Host "     * 保留所有现有配置：WiFi 凭据、屏幕旋转配置、拓竹账户登录 token"
+Write-Host ""
+$erase = Read-Host "输入 E 并回车 = 全部擦除；直接回车 = 不擦除（保留所有配置）"
+$doErase = ($erase -match "^[eE]$")
 
 $commonArgs = @("-vv", "-cd", "nodemcu", "-cb", "115200", "-cp", $port)
 
-Write-Host ""
-Write-Host "正在擦除 Flash..."
-& $tool @commonArgs "-ce"
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "擦除失败。请检查串口是否被其他软件占用，或按住 BOOT/FLASH 键后重试。" -ForegroundColor Red
-  Pause-Exit $LASTEXITCODE
+if ($doErase) {
+  Write-Host ""
+  Write-Host "已选择全部擦除：正在擦除 Flash..." -ForegroundColor Yellow
+  & $tool @commonArgs "-ce"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "擦除失败。请检查串口是否被其他软件占用，或按住 BOOT/FLASH 键后重试。" -ForegroundColor Red
+    Pause-Exit $LASTEXITCODE
+  }
+} else {
+  Write-Host ""
+  Write-Host "已选择不擦除：跳过全擦，直接写入固件（保留所有现有配置）..." -ForegroundColor Green
 }
 
 Write-Host ""

@@ -1,8 +1,8 @@
 {
-  "name": "printsphere-lite-companion",
-  "version": "0.5.31",
+  "name": "printsquare-companion",
+  "version": "0.5.32",
   "private": true,
-  "description": "Bambu Cloud setup tool for SD2 PrintSphere Lite",
+  "description": "Bambu Cloud setup tool for SD2 PrintSquare",
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js"
