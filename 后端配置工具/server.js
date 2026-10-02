@@ -5,10 +5,19 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.30";
+const BACKEND_VERSION = "backend-v0.5.31";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
+    changes: [
+      "ESP 内置 8081 后台新增中英文切换：页面右上角「中文 / English」一键切换整页，风格与本工具一致",
+      "语言选择保存在浏览器本地（localStorage psLang）并跨会话保持，首次打开跟随浏览器语言",
+      "状态徽章、剩余时间、速度档、MQTT 连接、耗材胶囊、按钮与提示文案全部双语，切换即时生效，无需刷新页面",
+      "统一项目版本为 v0.5.31，同步固件、网页后台与文档版本标识（后端本版无功能改动）"
+    ]
+  },
+  {
+    version: "backend-v0.5.30",
     changes: [
       "新增屏幕镜像支持：无 / 左右镜像，用于半透半反镜（HoloCubic 风格）等镜面观看场景",
       "镜像可与 0° / 90° / 180° / 270° 旋转自由组合；配置写入 LittleFS 并在重启后恢复，串口和 HTTP 配置链路都会同步 mirror",

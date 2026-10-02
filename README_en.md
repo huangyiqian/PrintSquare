@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.30-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.30-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.31-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.31-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 This project is an enhanced and improved fork of the original [PrintSphere Lite](https://github.com/ccord34/printsphere-lite). Powered by ESP8266EX and a 240x240 ST7789 display, it serves as a mini desktop monitor for real-time printing status and AMS filament tracking for Bambu Lab 3D printers.
@@ -29,6 +29,7 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 * **Live monitoring**: Provides print status, progress, temperatures, layer information, remaining time, and filament slot data.
 * **Multi-device management**: Isolates configuration per hardware identifier, prioritizes USB serial writes, and uses HTTP over the local network as a fallback.
 * **Dual-port access**: Provides Web management pages on both port 80 and port 8081.
+* **Chinese/English switch**: The built-in ESP page on port 8081 can switch between Chinese and English; the choice is stored in the browser.
 
 ---
 
