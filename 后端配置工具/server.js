@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.26-beta";
+const BACKEND_VERSION = "backend-v0.5.30";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,

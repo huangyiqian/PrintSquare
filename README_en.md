@@ -2,8 +2,8 @@
 
 # PrintSphere Lite Plus (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.26--beta-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.26--beta-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.30-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.30-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 This project is an enhanced and improved fork of the original [PrintSphere Lite](https://github.com/ccord34/printsphere-lite). Powered by ESP8266EX and a 240x240 ST7789 display, it serves as a mini desktop monitor for real-time printing status and AMS filament tracking for Bambu Lab 3D printers.
