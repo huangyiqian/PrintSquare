@@ -77,6 +77,94 @@ device/{serial}/report
 - 状态字段在不同来源里字段名不完全一致，必须做多字段兼容。
 - 如果日志里状态正常但屏幕不显示，优先检查 UI label 是否被隐藏、裁切、覆盖或画到屏幕外，不要只改解析层。
 
+### 3.1 细分阶段（`stg_cur`）
+
+`gcode_state` 只能区分"打印中 / 暂停 / 完成"，无法区分"正在自动调平""正在换料""正在回零"。
+打印机在**同一个 `print` 对象**里额外上报当前动作阶段：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `stg_cur` | number（个别固件回传字符串） | 当前动作阶段，取值 0–77 |
+| `stg` | array | 本次打印将依次执行的阶段列表，可用于预判 |
+| `mc_print_stage` / `mc_print_sub_stage` | number | 固件内部打印阶段，语义与 `stg_cur` **不同**，不建议当作细分状态使用 |
+
+空闲值因机型而异：**X1 系列返回 `-1`，P1 系列返回 `255`**，两者都必须按"无细分阶段"处理。
+
+> **本项目注意**：`parseMqttPayload()` 使用 `DeserializationOption::Filter(mqttFilter)` 做字段白名单，
+> 未加入 `initMqttFilter()` 的字段会在解析前被直接丢弃。新增字段时**必须同时**加白名单
+> （本项目已加入 `print.stg_cur`）。
+
+#### `stg_cur` 完整枚举（0–77）
+
+这是字段本身的取值范围，与本项目是否给某个值加标签无关。
+
+| 值 | 枚举 | 值 | 枚举 | 值 | 枚举 |
+|---:|---|---:|---|---:|---|
+| 0 | `printing` | 26 | `paused_ams_lost` | 52 | `check_material` |
+| 1 | `auto_bed_leveling` | 27 | `paused_low_fan_speed_heat_break` | 53 | `calibrating_live_view_camera` |
+| 2 | `heatbed_preheating` | 28 | `paused_chamber_temperature_control_error` | 54 | `waiting_for_heatbed_temperature` |
+| 3 | `sweeping_xy_mech_mode` | 29 | `cooling_chamber` | 55 | `check_material_position` |
+| 4 | `changing_filament` | 30 | `paused_user_gcode` | 56 | `calibrating_cutter_model_offset` |
+| 5 | `m400_pause` | 31 | `motor_noise_showoff` | 57 | `measuring_surface` |
+| 6 | `paused_filament_runout` | 32 | `paused_nozzle_filament_covered_detected` | 58 | `thermal_preconditioning` |
+| 7 | `heating_hotend` | 33 | `paused_cutter_error` | 59 | `homing_blade_holder` |
+| 8 | `calibrating_extrusion` | 34 | `paused_first_layer_error` | 60 | `calibrating_camera_offset` |
+| 9 | `scanning_bed_surface` | 35 | `paused_nozzle_clog` | 61 | `calibrating_blade_holder_position` |
+| 10 | `inspecting_first_layer` | 36 | `check_absolute_accuracy_before_calibration` | 62 | `hotend_pick_place_test` |
+| 11 | `identifying_build_plate_type` | 37 | `absolute_accuracy_calibration` | 63 | `waiting_chamber_temperature_equalize` |
+| 12 | `calibrating_micro_lidar` | 38 | `check_absolute_accuracy_after_calibration` | 64 | `preparing_hotend` |
+| 13 | `homing_toolhead` | 39 | `calibrate_nozzle_offset` | 65 | `calibrating_detection_nozzle_clumping` |
+| 14 | `cleaning_nozzle_tip` | 40 | `bed_level_high_temperature` | 66 | `purifying_chamber_air` |
+| 15 | `checking_extruder_temperature` | 41 | `check_quick_release` | 67 | `measuring_rotary_attachment` |
+| 16 | `paused_user` | 42 | `check_door_and_cover` | 68 | `moving_toolhead_above_purge_chute` |
+| 17 | `paused_front_cover_falling` | 43 | `laser_calibration` | 69 | `cooling_nozzle` |
+| 18 | `calibrating_micro_lidar` | 44 | `check_plaform` | 70 | `moving_toolhead_to_center_of_heatbed` |
+| 19 | `calibrating_extrusion_flow` | 45 | `check_birdeye_camera_position` | 71 | `active_arc_fitting` |
+| 20 | `paused_nozzle_temperature_malfunction` | 46 | `calibrate_birdeye_camera` | 72 | `hotend_type_detection` |
+| 21 | `paused_heat_bed_temperature_malfunction` | 47 | `bed_level_phase_1` | 73 | `build_plate_alignment_detection` |
+| 22 | `filament_unloading` | 48 | `bed_level_phase_2` | 74 | `heatbed_surface_foreign_object_detection` |
+| 23 | `paused_skipped_step` | 49 | `heating_chamber` | 75 | `heatbed_underside_foreign_object_detection` |
+| 24 | `filament_loading` | 50 | `heated_bedcooling` | 76 | `pre_extrusion_before_printing` |
+| 25 | `calibrating_motor_noise` | 51 | `print_calibration_lines` | 77 | `preparing_ams` |
+
+#### 本项目实际加标签的阶段
+
+只给 **A1 / P1 这类机型会用到的阶段**加标签，其余值命中时回退到"通用状态"（`PRINT`/`PREP`…）。
+完整对照（含中文点阵字模像素图）见 [`docs/状态字模对照表.md`](docs/状态字模对照表.md)。
+
+| `stg_cur` | 枚举 | 英文缩写 | 中文标签 |
+|---:|---|---|---|
+| 1 | `auto_bed_leveling` | `BEDLVL` | **自动调平** |
+| 2 | `heatbed_preheating` | `BEDHEAT` | **热床预热** |
+| 3 | `sweeping_xy_mech_mode` | `VIBRA` | **振动补偿** |
+| 4 | `changing_filament` | `FILCHG` | **换料中** |
+| 5 | `m400_pause` | `M400` | **暂停中** |
+| 6 | `paused_filament_runout` | `RUNOUT` | **断料暂停** |
+| 7 | `heating_hotend` | `NOZHEAT` | **喷嘴加热** |
+| 8 | `calibrating_extrusion` | `EXTCAL` | **挤出校准** |
+| 13 | `homing_toolhead` | `HOME` | **回零中** |
+| 14 | `cleaning_nozzle_tip` | `NOZCLN` | **清洁喷嘴** |
+| 16 | `paused_user` | `PAUSE` | **已暂停** |
+| 22 | `filament_unloading` | `UNLOAD` | **退料中** |
+| 24 | `filament_loading` | `LOAD` | **进料中** |
+| 25 | `calibrating_motor_noise` | `MOTCAL` | **电机校准** |
+| 30 | `paused_user_gcode` | `GCODE` | **指令暂停** |
+| 32 | `paused_nozzle_filament_covered_detected` | `BLOB` | **喷嘴裹料** |
+| 35 | `paused_nozzle_clog` | `CLOG` | **喷嘴堵塞** |
+| 17、20、21、23、26、27、28、33、34 | *（未列出的 paused_\* 报错类，共 9 个值）* | `ERR` | **错误** |
+
+#### 显示注意事项
+
+- **只有"打印中 / 准备中 / 暂停中"才用细分阶段**；完成、失败、空闲、离线必须沿用
+  `DONE` / `ERR` / `IDLE` / `OFFLINE`，否则阶段值滞后会把终态盖掉。
+- 未收录的值（含 `-1`、`255`）回退到通用状态词，不要显示空白或原始数字。
+- 中文标签用 **16x16 1bpp 点阵字模**（`src/cn_stage_glyphs.h`，Windows 黑体 `simhei.ttf`、
+  16px、SingleBitPerPixelGridFit、取笔画外接框居中、阈值 127、MSB 先行，格式与
+  `drawProgmemHexBitmap()` 一致）。16px 与字体 2 同高，所以三种布局都不用移动原有元素；
+  标签最长 4 字共 70px（4*16+3*2），因此模型名限宽到 92px（经典 90、时钟 100）以免重叠。
+- 显示中文还是英文由设备配置项 `lang`（`zh` / `en`）决定，由 8081 网页的中英文切换写入并断电保存。
+- 阶段切换频繁（调平→预热→回零…），刷新策略仍是脏字段局部刷新，不要整屏重绘。
+
 ## 4. 打印进度
 
 | 数据 | 类型 | 兼容字段名 |
@@ -248,6 +336,10 @@ TPU-AMS
 - `trayType` 表示当前使用中的耗材类型。
 - 耗材类型不一定绝对来自 AMS。AMS 是外置设备，设备未连接 AMS 时也可能通过任务、虚拟料盘或其他状态字段提供耗材信息。
 - 不要只依赖 AMS 槽位数据判断当前耗材。
+- **`tray_type` / `filament_type` 是"当前正在使用的耗材"，AMS 打印时它来自 AMS 槽位，
+  不能据此判断"外挂料盘存在"。** 判断外挂料盘要看 `vt_tray.tray_type`（为空即没有外挂料盘），
+  判断外挂是否在用要看 `tray_now == 254`。`tray_now == 255` 表示**没有选中任何料盘**
+  （不是外挂），把它当成外挂会在换料时把一个不存在的外挂槽点亮。
 - 如果字段为空，UI 应隐藏耗材标签或显示“未知”，不要写死成 `PLA Basic`。
 
 ## 9. 错误信息

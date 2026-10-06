@@ -5,10 +5,21 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.32";
+const BACKEND_VERSION = "backend-v0.5.40";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
+    changes: [
+      "固件新增打印机细分状态显示：解析 MQTT print.stg_cur，把「自动调平 / 热床预热 / 振动补偿 / 换料中 / 退料中 / 进料中 / 回零中 / 清洁喷嘴 / 喷嘴加热 / 挤出校准 / 电机校准 / 断料暂停 / 喷嘴裹料 / 喷嘴堵塞 / 已暂停 / 指令暂停」等动作显示到经典、信息面板、时钟三套布局的右上角",
+      "英文缩写与中文简写（16x16 点阵字模）二选一，跟随 8081 页面中英文切换，写入设备并断电保存；未收录阶段自动回退到通用状态",
+      "未列出的报错类阶段统一显示 ERR / 错误；A1/P1 用不到的 X1 / H2 专用阶段不做标签",
+      "8081 页面「当前动作」一格改为占满整行，并显示 MQTT 原始状态码（gcode_state / stg_cur）与一句说明",
+      "修复换料时误显示不存在的外挂（ext）料槽：顶层 tray_type 不再被当作外挂料盘，且 tray_now=255 不再判定为外挂在用",
+      "统一版本到 v0.5.40，同步固件、后端与中英文 README 徽章"
+    ]
+  },
+  {
+    version: "backend-v0.5.32",
     changes: [
       "项目正式更名 PrintSquare：发布包前缀、配置工具 exe、固件 bin、屏幕与网页标题、MQTT clientId 前缀统一改用 PrintSquare",
       "README 功能介绍重写：删去未实现的「无任务自动降亮」，补充半透半反镜（无 / 左右镜像）说明，双端口描述改为「同一后台同时监听 80 与 8081」",
