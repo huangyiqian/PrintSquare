@@ -2,8 +2,8 @@
 
 # PrintSquare (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/Firmware-v0.5.32-brightgreen)
-![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.32-blue)
+![Version](https://img.shields.io/badge/Firmware-v0.5.40-brightgreen)
+![Backend Version](https://img.shields.io/badge/WebUI_Backend-v0.5.40-blue)
 ![License](https://img.shields.io/badge/License-Non--Commercial-orange)
 
 📦 Repository: [https://github.com/huangyiqian/PrintSquare](https://github.com/huangyiqian/PrintSquare)
@@ -23,6 +23,8 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 ### 📊 Screen UI & Layouts
 * **Three screen layouts**: Classic, Dashboard and Clock, all fitting the 240x240 ST7789 display, switchable from the built-in 8081 admin page.
 * **Complete print overview**: Shows print progress, nozzle temperature, bed temperature, chamber temperature, layer count and estimated remaining time.
+* **Detailed printer stage**: Parses the Bambu MQTT `stg_cur` action stage and shows the **actual current action** — auto bed leveling, heatbed preheating, vibration compensation, changing / unloading / loading filament, homing, cleaning the nozzle, heating the hotend, extrusion calibration, motor calibration, filament runout, nozzle wrapping, nozzle clog, and more — in the top-right corner of all three layouts, instead of only the four coarse states.
+* **Bilingual status text**: The same status can be rendered either as an English abbreviation (`BEDLVL`, `FLOWCAL`, ...) or as **Chinese bitmap glyphs** (自动调平, 换料中, ...). It follows the Chinese/English switch on the 8081 page and is stored on the device across reboots. Stages specific to other printer families fall back to the generic state automatically, and unmapped error stages are shown as "错误".
 * **Backlight & brightness schedule**: 0-100% manual brightness plus optional day / night time slots (configurable on the 8081 page); settings persist across power loss.
 * **Half-mirror support (image flip)**: Built for HoloCubic-style 45° half-mirror assemblies, offering Off / Left-right mirror — a mirrored image cannot be corrected by any rotation angle, so it must be flipped electronically. The flip combines freely with 0° / 90° / 180° / 270° rotation, can be switched from both the 8081 page and the desktop tool, and is stored in LittleFS so it survives reboots.
 * **Screen rotation**: 0° / 90° / 180° / 270° rotation steps, persisted across power loss; only orientation changes trigger a full redraw, while normal data updates stay partial.
@@ -30,10 +32,10 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 ### 🌐 Web Configuration Tool
 * **Device setup**: Wi-Fi scanning, printer selection and synchronization, layout / brightness / rotation / mirror settings; writes go over USB serial first with LAN HTTP as fallback.
-* **Live monitoring**: Provides print status, progress, temperatures, layer information, remaining time, and filament slot data.
+* **Live monitoring**: Provides print status, progress, temperatures, layer information, remaining time, filament slot data, and the **current action** together with the raw MQTT codes (`gcode_state` / `stg_cur`) and an explanation for troubleshooting.
 * **Multi-device management**: Keeps a separate profile per ESP keyed by MAC / device_id (Wi-Fi, serial port, address, selected printer); the cloud account and printer list are shared.
 * **Dual-port access**: The same admin page listens on both port 80 and port 8081, so it opens without typing a port; `http://ESP-IP:8081/` is the recommended URL.
-* **Chinese/English switch**: The built-in ESP page on port 8081 can switch between Chinese and English; the choice is stored in the browser.
+* **Chinese/English switch**: The built-in ESP page on port 8081 can switch between Chinese and English; the choice is stored in the browser and **is also pushed to the device, which decides whether the screen itself shows Chinese glyphs or English abbreviations**.
 
 ---
 

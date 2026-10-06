@@ -12,13 +12,16 @@
 #include <WiFiClientSecureBearSSL.h>
 #include <time.h>
 
+// 中文点阵字模（PROGMEM / uint8_t 依赖 Arduino.h，必须放在其之后）
+#include "cn_stage_glyphs.h"
+
 TFT_eSPI tft;
 WiFiServer apiServer(ESP_CONFIG_PORT);
 WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.32";
+const char *FIRMWARE_VERSION = "firmware-v0.5.40";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000
@@ -162,6 +165,9 @@ struct PrinterState {
   int activeTray = -1;
   int spdLvl = -1;
   int spdMag = -1;
+  // MQTT print.stg_cur：打印机当前细分阶段（自动调平/换料/回零等），
+  // -1 = X1 系列空闲，255 = P1 系列空闲；标签表见 cn_stage_glyphs.h。
+  int stageCur = -1;
   bool amsExist = false;
   AmsTrayInfo amsSlots[4];
   AmsTrayInfo extSlot;
@@ -186,6 +192,9 @@ struct StoredConfig {
   uint8_t aliasBitmapH = 0;
   uint8_t brightness = 100;
   String brightnessSchedule = "";
+  // 屏幕右上角状态文字语言，由 8081 网页的中英文切换写入：
+  // "en" = 英文缩写（默认，保持原有行为）；"zh" = 中文两点阵字（cn_stage_glyphs.h）
+  String uiLang = "en";
 };
 
 struct PrinterOption {
@@ -649,6 +658,7 @@ bool saveStoredConfig() {
   doc["alias_bitmap_h"] = stored.aliasBitmapH;
   doc["brightness"] = stored.brightness;
   doc["brightness_schedule"] = stored.brightnessSchedule;
+  doc["lang"] = stored.uiLang;
   serializeJson(doc, file);
   file.close();
   return true;
@@ -752,6 +762,10 @@ void loadStoredConfig() {
   stored.aliasBitmapH = doc["alias_bitmap_h"] | 0;
   stored.brightness = normalizeBrightness(doc["brightness"] | 100);
   stored.brightnessSchedule = doc["brightness_schedule"] | "";
+  {
+    const char *savedLang = doc["lang"] | "en";
+    stored.uiLang = (strcmp(savedLang, "zh") == 0) ? "zh" : "en";
+  }
   pr.serial = stored.serial;
   pr.displayName = stored.name;
   pr.model = stored.model;
@@ -763,6 +777,12 @@ String compactMac() {
   mac.toLowerCase();
   return mac;
 }
+
+String stageAbbrevText();
+String cnLabelText(uint8_t label);
+uint8_t currentCnLabel();
+uint8_t genericCnLabel();
+uint8_t stageOnlyCnLabel();
 
 String statusJson() {
   JsonDocument doc;
@@ -792,6 +812,15 @@ String statusJson() {
   doc["printer_count"] = printerOptionCount;
   doc["online"] = pr.online;
   doc["status"] = pr.status;
+  doc["stage_cur"] = pr.stageCur;
+  doc["stage_text"] = stageAbbrevText();
+  // 中文标签：stage_cn 仅在确实有细分阶段时非空；status_cn 是通用状态中文
+  {
+    uint8_t stageLabel = stageOnlyCnLabel();
+    doc["stage_cn"] = (stageLabel != CN_LBL_NONE) ? cnLabelText(stageLabel) : "";
+  }
+  doc["status_cn"] = cnLabelText(genericCnLabel());
+  doc["lang"] = stored.uiLang;
   doc["progress"] = pr.progress;
   doc["nozzle_temp"] = pr.nozzleTemp;
   doc["left_nozzle_temp"] = pr.leftNozzleTemp;
@@ -843,7 +872,8 @@ String statusJson() {
     ext["type"] = pr.extSlot.trayType;
     ext["remain"] = (pr.extSlot.isOfficial && pr.extSlot.remain >= 0 && pr.extSlot.remain <= 100) ? pr.extSlot.remain : -1;
     ext["official"] = pr.extSlot.isOfficial;
-    ext["active"] = (pr.activeTray == 254 || pr.activeTray == 255);
+    // tray_now: 254 = 外挂料盘；255 = 没有选中任何料盘（不是外挂），不能算作外挂在用。
+    ext["active"] = (pr.activeTray == 254);
   }
   String out;
   serializeJson(doc, out);
@@ -1379,7 +1409,26 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   else if (pr.spdLvl == 4) client.print( F("狂暴 (166%)") );
   else if (pr.spdLvl == 2) client.print( F("标准 (100%)") );
   else client.print( F("--") );
-  client.print( F("</div></div></div>"));
+  client.print( F("</div></div>"));
+
+  // 7. Detailed stage (当前动作): 占满整行；右侧补上 MQTT 原始状态码与一句说明
+  client.print( F("<div class=\"metric-item\" style=\"grid-column:1 / -1;display:flex;"
+                  "align-items:center;gap:16px;flex-wrap:wrap\">"
+                  "<div style=\"min-width:104px\">"
+                  "<div class=\"m-label\">🔧 当前动作</div>"
+                  "<div id=\"pStage\" class=\"m-val\">"));
+  {
+    String stage = stageAbbrevText();
+    client.print(stage.length() ? stage : String("--"));
+  }
+  client.print( F("</div></div>"
+                  "<div style=\"display:flex;gap:8px;flex-wrap:wrap\">"
+                  "<span id=\"pCodeState\" class=\"badge muted\">gcode_state=--</span>"
+                  "<span id=\"pCodeStage\" class=\"badge muted\">stg_cur=--</span>"
+                  "</div>"
+                  "<div id=\"pStageNote\" style=\"color:#8e8e93;font-size:12px;line-height:1.5;"
+                  "flex:1;min-width:150px\">--</div>"
+                  "</div></div>"));
 
   // Filament / AMS Box
   client.print( F("<div id=\"pAmsBox\" style=\"margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:none\">"
@@ -1545,6 +1594,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
     "'日间段':'Day slot','日间亮度':'Day brightness',"
     "'保存并推送到设备':'Save and push to device',"
     "'实时调试数据':'Live debug data','查看 JSON':'Show JSON','隐藏 JSON':'Hide JSON',"
+    "'🔧 当前动作':'🔧 Current action','轮询中':'Polling',"
     "'槽位':'Slot ','外挂':'External','空':'Empty',"
     "'✅ 定时已关闭并即时生效':'✅ Schedule turned off and applied immediately',"
     "'✅ 已保存并即时推送到设备！':'✅ Saved and pushed to the device!'};\n"));
@@ -1575,11 +1625,16 @@ void sendEspHomeHtml(WiFiClient &realClient) {
     "while((n=w.nextNode()))trNode(n);fixMixedText();}\n"));
   client.print(F("function renderLangBtns(){['langZh','langEn'].forEach(function(id){var el=document.getElementById(id);"
     "if(el)el.className=(id===(LANG==='en'?'langEn':'langZh'))?'active':'';});}\n"
+    "/* 把网页语言同步到设备：屏幕右上角据此显示英文缩写或中文点阵字 */\n"
+    "function pushLangToDevice(l){try{"
+    "fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:l})})"
+    ".catch(function(){});}catch(e){}}\n"
     "function syncJsonBtn(){var b=document.querySelector('.debug-card .btn-action'),l=document.getElementById('log');"
     "if(!b||!l)return;b.textContent=(l.style.display==='block')?t('隐藏 JSON'):t('查看 JSON');}\n"
     "function setLang(l){LANG=(l==='en')?'en':'zh';try{localStorage.setItem('psLang',LANG);}catch(e){}"
     "document.documentElement.lang=(LANG==='en')?'en':'zh-CN';renderLangBtns();applyDom(document.body);"
-    "if(lastData)renderStatus(lastData);else refreshStatus();updateManualBrightnessState();syncJsonBtn();}\n"
+    "if(lastData)renderStatus(lastData);else refreshStatus();updateManualBrightnessState();syncJsonBtn();"
+    "pushLangToDevice(LANG);}\n"
     "function initLang(){document.documentElement.lang=(LANG==='en')?'en':'zh-CN';"
     "renderLangBtns();applyDom(document.body);}\n"
     "const mo=new MutationObserver(function(muts){if(LANG!=='en')return;"
@@ -1706,6 +1761,24 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "  }\n"
         "  var ps=document.getElementById('pSpeed');\n"
         "  if(ps)ps.textContent=(d.spd_lvl!==undefined&&d.spd_lvl>0)?fmtSpd(d.spd_lvl,d.spd_mag):'--';\n"
+        "  var sg=document.getElementById('pStage');\n"
+        "  var dtAct=(LANG==='zh')?(d.stage_cn||''):(d.stage_text||'');\n"
+        "  if(sg)sg.textContent=dtAct?dtAct:si.t;\n"
+        "  var scState=document.getElementById('pCodeState');\n"
+        "  if(scState)scState.textContent='gcode_state='+(d.status||'--');\n"
+        "  var scStage=document.getElementById('pCodeStage');\n"
+        "  var nStage=(d.stage_cur===undefined||d.stage_cur===null)?null:d.stage_cur;\n"
+        "  if(scStage)scStage.textContent='stg_cur='+(nStage===null?'--':nStage);\n"
+        "  var scNote=document.getElementById('pStageNote');\n"
+        "  if(scNote){\n"
+        "    var zh=(LANG==='zh'),cn=d.stage_cn||'',en=d.stage_text||'',note;\n"
+        "    if(cn||en){note=zh?('正在'+cn.replace(/中$/,'')):('Doing: '+en);}\n"
+        "    else if(nStage===0){note=zh?'正常打印中（stg_cur 0 = printing）':'Printing normally (stg_cur 0 = printing)';}\n"
+        "    else if(nStage!==null&&nStage>0&&nStage<=77){note=zh?('stg_cur '+nStage+' 未收录标签，按通用状态显示'):('stg_cur '+nStage+' not mapped; generic state shown');}\n"
+        "    else{note=zh?('无细分动作（stg_cur '+(nStage===null?'--':nStage)+'），显示通用状态'):('No detailed stage (stg_cur '+(nStage===null?'--':nStage)+'); generic state shown');}\n"
+        "    scNote.textContent=note;\n"
+        "  }\n"
+        "  if(!langSynced&&d.lang!==undefined){langSynced=true;if(d.lang!==LANG)pushLangToDevice(LANG);}\n"
         "  var amsHtml='';\n"
         "  if(d.ams&&Array.isArray(d.ams)){\n"
         "    d.ams.forEach(function(s){\n"
@@ -1743,6 +1816,7 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "  }\n"
         "}\n"
         "let lastData=null;\n"
+        "let langSynced=false;\n"
         "function renderStatus(d){\n"
         "  lastData=d;\n"
         "    let l=document.getElementById('log');if(l&&l.style.display==='block')l.textContent=JSON.stringify(d,null,2);\n"
@@ -1923,6 +1997,7 @@ String applyConfigBody(const String &body, int &statusCode) {
   else if (doc["display_mirror"].is<const char *>())
     requestedMirror = atoi(doc["display_mirror"].as<const char *>());
   const char *aliasBitmapHex = doc["alias_bitmap_hex"] | "";
+  const char *langReq = doc["lang"] | doc["ui_lang"] | "";
   const char *printersPayload = doc["printers_json"] | "";
   int requestedBrightness = doc["brightness"] | doc["brightness_percent"] | -1;
   bool wifiChanged = false;
@@ -2006,6 +2081,20 @@ String applyConfigBody(const String &body, int &statusCode) {
   bool layoutChanged = false;
   bool rotationChanged = false;
   bool mirrorChanged = false;
+  bool langChanged = false;
+  if (langReq[0]) {
+    String nextLang = langReq;
+    nextLang.toLowerCase();
+    nextLang = (nextLang == "zh") ? "zh" : "en";
+    if (stored.uiLang != nextLang) {
+      stored.uiLang = nextLang;
+      langChanged = true;
+      // 只影响右上角状态文字的绘制，清掉脏检查键即可触发局部重绘
+      cache.status = "";
+      cache.clockStatus = "";
+      cache.dashStatus = "";
+    }
+  }
   if (layout[0]) {
     String nextLayout = layout;
     nextLayout.toLowerCase();
@@ -2059,7 +2148,7 @@ String applyConfigBody(const String &body, int &statusCode) {
     }
   }
   bool orientationChanged = rotationChanged || mirrorChanged;
-  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged || orientationChanged;
+  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged || orientationChanged || langChanged;
   bool ok = anyConfigChanged ? saveStoredConfig() : true;
   if (orientationChanged) {
     applyDisplayOrientation();
@@ -2843,6 +2932,13 @@ void applyPrint(JsonObject print) {
   if (i != -999)
     pr.totalLayers = i;
 
+  // 细分阶段：stg_cur 是整数（X1 空闲 -1 / P1 空闲 255），部分固件回传字符串。
+  static const char *const stageKeys[] = {"stg_cur", "stgCur"};
+  i = jsonIntForKeys(print, stageKeys, sizeof(stageKeys) / sizeof(stageKeys[0]),
+                     -999);
+  if (i != -999)
+    pr.stageCur = i;
+
   // Check AMS presence via ams_exist_bits
   if (!print["ams_exist_bits"].isNull()) {
     const char *bits = print["ams_exist_bits"];
@@ -2929,9 +3025,23 @@ void applyPrint(JsonObject print) {
         pr.extSlot.trayColor = strtoul(tc, nullptr, 16) << 8;
       }
       pr.extSlot.remain = vtObj["remain"] | -1;
+    } else {
+      // vt_tray 存在但 tray_type 为空 → 外挂槽确实没有料盘。必须显式清掉旧值，
+      // 否则一旦被写过就会永久残留（applyPrint 里没有别的地方会复位它）。
+      pr.extSlot.valid = false;
+      pr.extSlot.trayType = "";
+      pr.extSlot.traySubBrands = "";
+      pr.extSlot.tagUid = "";
+      pr.extSlot.trayColor = 0;
+      pr.extSlot.remain = -1;
+      pr.extSlot.isOfficial = false;
     }
   }
-  if (!print["tray_type"].isNull() || !print["filament_type"].isNull()) {
+  // 顶层 print.tray_type / filament_type 表示"当前正在使用的耗材"：AMS 打印时它来自
+  // AMS 槽位，并不是外挂料盘。只有"设备没有 AMS"或"当前明确选中外挂料盘(tray_now=254)"
+  // 时才能用它推断外挂槽，否则网页会多出一个并不存在的外挂料盘（换料时尤其明显）。
+  if ((!pr.amsExist || pr.activeTray == 254) &&
+      (!print["tray_type"].isNull() || !print["filament_type"].isNull())) {
     const char *tt = print["tray_type"];
     if (!tt || strlen(tt) == 0)
       tt = print["filament_type"];
@@ -3088,6 +3198,8 @@ void initMqttFilter() {
   mqttFilter["print"]["spdLvl"] = true;
   mqttFilter["print"]["spdMag"] = true;
   mqttFilter["print"]["gcode_state"] = true;
+  mqttFilter["print"]["stg_cur"] = true;
+  mqttFilter["print"]["stgCur"] = true;
   mqttFilter["print"]["print_status"] = true;
   mqttFilter["print"]["printStatus"] = true;
   mqttFilter["print"]["status"] = true;
@@ -3533,6 +3645,37 @@ uint16_t statusColor() {
 void drawBold(const String &text, int x, int y);
 String fitTextToWidth(String text, uint8_t font, int maxWidth, bool bold);
 
+// stg_cur -> 右上角英文缩写。未收录/空闲阶段返回空串（由调用方回退到通用状态词）。
+String stageAbbrevText() {
+  if (pr.stageCur < 0 || pr.stageCur > 77)
+    return "";
+  // 逐字节 pgm_read_byte 读出，避免对 flash 指针直接 strlen
+  char buf[9];
+  uint8_t k = 0;
+  for (; k < 8; ++k) {
+    char c = (char)pgm_read_byte(&CN_STAGE_EN[pr.stageCur][k]);
+    buf[k] = c;
+    if (c == '\0')
+      break;
+  }
+  buf[k] = '\0';
+  return String(buf);
+}
+
+// 右上角最终状态词：有细分阶段时用缩写，否则回退到原有状态词（fallback）。
+// 只有"打印中/准备中/暂停中"才细分；DONE / ERR / IDLE / OFFLINE 保持原样，
+// 避免阶段值滞后时把完成或报错状态盖掉。
+String headerStatusText(const String &fallback) {
+  if (isPrinterOnline() &&
+      (isPrintingState(pr.status) || isPreparingState(pr.status) ||
+       isPausedState(pr.status))) {
+    String stage = stageAbbrevText();
+    if (stage.length())
+      return stage;
+  }
+  return fallback;
+}
+
 String dashboardStatusText() {
   if (!isPrinterOnline())
     return "OFFLINE";
@@ -3620,6 +3763,124 @@ void drawCnCentered(const char *hex, int w, int h, int x, int y, int boxW,
                     int boxH, uint16_t color) {
   drawProgmemHexBitmap(hex, w, h, x + (boxW - w) / 2, y + (boxH - h) / 2,
                        color);
+}
+
+// ===========================================================================
+// 状态文字：屏幕右上角统一入口（英文缩写 / 中文点阵字）
+// 中文点阵字模见 cn_stage_glyphs.h（黑体 16px，1bpp，与 font2 同高，
+// 因此三种布局都不需要改动原有元素位置）。
+// ===========================================================================
+
+// 屏幕是否使用英文缩写（默认 en，保持原有英文显示）
+bool uiLangIsEn() { return !(stored.uiLang == "zh"); }
+
+// 通用状态（非细分阶段）对应的中文标签索引
+uint8_t genericCnLabel() {
+  if (!isPrinterOnline())
+    return CN_LBL_OFFLINE;
+  if (isPrintingState(pr.status))
+    return CN_LBL_PRINT;
+  if (isPreparingState(pr.status))
+    return CN_LBL_PREP;
+  if (isPausedState(pr.status))
+    return CN_LBL_PAUSE;
+  if (isFinishedState(pr.status))
+    return CN_LBL_DONE;
+  if (isFailedState(pr.status))
+    return CN_LBL_ERR;
+  return CN_LBL_IDLE;
+}
+
+// 只有"确实存在细分阶段"时才返回阶段标签，否则返回 CN_LBL_NONE。
+// 用于网页"当前动作"一行：没有具体阶段时显示空，而不是拿通用状态顶上。
+uint8_t stageOnlyCnLabel() {
+  if (isPrinterOnline() &&
+      (isPrintingState(pr.status) || isPreparingState(pr.status) ||
+       isPausedState(pr.status))) {
+    String abbr = stageAbbrevText();
+    if (abbr.length())
+      return (uint8_t)pr.stageCur;
+  }
+  return CN_LBL_NONE;
+}
+
+// 当前应显示的中文标签：有细分阶段用阶段中文，其余（完成/失败/空闲/离线）
+// 用通用状态中文，避免阶段值滞后时盖掉终态。
+uint8_t currentCnLabel() {
+  uint8_t stage = stageOnlyCnLabel();
+  return (stage != CN_LBL_NONE) ? stage : genericCnLabel();
+}
+
+// 标签 -> UTF-8 汉字文本（供 /api/status 与调试输出）
+String cnLabelText(uint8_t label) {
+  if (label >= CN_LABEL_COUNT)
+    return "";
+  char buf[13]; // 最长 4 个汉字 = 12 字节 + NUL
+  uint8_t k = 0;
+  for (; k < 12; ++k) {
+    char c = (char)pgm_read_byte(&CN_LABEL_UTF8[label][k]);
+    buf[k] = c;
+    if (c == '\0')
+      break;
+  }
+  buf[k] = '\0';
+  return String(buf);
+}
+
+// 右对齐绘制标签的中文点阵字（2~4 字，每字 16x16，间隔 2px）；
+// topY 与 font2 文本顶端对齐（高度相同）。4 字共 4*16+3*2 = 70px。
+void drawCnLabelRight(int rightX, int topY, uint8_t label, uint16_t color) {
+  if (label >= CN_LABEL_COUNT)
+    return;
+  uint8_t ids[CN_MAX_CHARS];
+  int n = 0;
+  for (; n < CN_MAX_CHARS; ++n) {
+    uint8_t gi = (uint8_t)pgm_read_byte(&CN_LABEL_GLYPH[label][n]);
+    if (gi == 0xFF)
+      break;
+    ids[n] = gi;
+  }
+  if (n <= 0)
+    return;
+  const int gap = 2;
+  const int totalW = CN_GLYPH_W * n + gap * (n - 1);
+  int x = rightX - totalW;
+  for (int k = 0; k < n; ++k) {
+    uint8_t gi = ids[k];
+    if (gi >= CN_GLYPH_COUNT)
+      continue;
+    drawProgmemHexBitmap(CN_GLYPH[gi], CN_GLYPH_W, CN_GLYPH_H,
+                         x + k * (CN_GLYPH_W + gap), topY, color);
+  }
+}
+
+// 右上角状态绘制统一入口：
+//   中文模式 -> 两个中文点阵字（宽度 34px，远小于原 58px 文本区）
+//   英文模式 -> 原有英文缩写/状态词，仍用 fitTextToWidth 限制在 58px 内
+void drawHeaderStatus(int rightX, int topY, const String &enFallback,
+                      uint16_t color) {
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(color, C_CARD);
+  tft.setTextPadding(0);
+  if (!uiLangIsEn()) {
+    uint8_t label = currentCnLabel();
+    if (label != CN_LBL_NONE) {
+      drawCnLabelRight(rightX, topY, label, color);
+      return;
+    }
+  }
+  tft.drawString(fitTextToWidth(headerStatusText(enFallback), 2, 58, false),
+                 rightX, topY);
+}
+
+// 时钟布局底部状态卡的脏检查键：状态词 + 细分阶段 + 语言，
+// 三者任一变化都要重绘（阶段变化很频繁，必须参与脏检查）。
+String clockStatusKey() {
+  char buf[28];
+  snprintf(buf, sizeof(buf), "%s|%d|%s", dashboardStatusText().c_str(),
+           pr.stageCur, stored.uiLang.c_str());
+  return String(buf);
 }
 
 void drawAliasBitmap(int x, int y, uint16_t color) {
@@ -4025,24 +4286,21 @@ void drawDashboardBase() {
 void drawDashboardFields() {
   // 1. Top Header Capsule Bar (Model on left, Status + LED on right)
   String model = getTopLeftDisplayName();
-  String st = dashboardStatusText();
+  String st = headerStatusText(dashboardStatusText());
   if (model != cache.model || st != cache.status) {
     drawGlassCard(14, 10, 212, 22, 11);
 
-    // Left: Model
+    // Left: Model（限宽 92：右侧中文标签最多 4 字 70px，从 x=126 起，互不遮挡）
     tft.setTextDatum(TL_DATUM);
     tft.setTextFont(2);
     tft.setTextColor(C_TEXT, C_CARD);
-    tft.drawString(model.length() ? model : "--", 24, 13);
+    tft.drawString(fitTextToWidth(model.length() ? model : "--", 2, 92, false), 24, 13);
 
     // Right: Status + LED
     uint16_t ledColor = isPrinterOnline() ? statusColor() : C_ORANGE;
     tft.fillCircle(206, 21, 4, ledColor);
 
-    tft.setTextDatum(TR_DATUM);
-    tft.setTextFont(2);
-    tft.setTextColor(statusColor(), C_CARD);
-    tft.drawString(st, 196, 13);
+    drawHeaderStatus(196, 13, dashboardStatusText(), statusColor());
 
     cache.model = model;
     cache.status = st;
@@ -4092,7 +4350,8 @@ void drawDashboardFields() {
       snprintf(l, sizeof(l), "L %d", pr.currentLayer);
       tft.drawString(l, 216, 40);
     } else {
-      tft.drawString(st, 216, 40);
+      // 没有层数信息时退回显示状态：与顶栏同一入口，中文模式下也是中文点阵
+      drawHeaderStatus(216, 40, st, C_CYAN);
     }
 
     // Right Lower: Speed Profile (Option 1)
@@ -4175,7 +4434,8 @@ void drawDashboardFields() {
       // No AMS connected: Only draw slot 0 as "ext"
       const AmsTrayInfo &ext = pr.extSlot.valid ? pr.extSlot : pr.amsSlots[0];
       int slotX = 22;
-      bool isActive = (pr.activeTray == 254 || pr.activeTray == 255 ||
+      // tray_now=255 只是"没有选中料盘"，不应把外挂槽点亮成在用
+      bool isActive = (pr.activeTray == 254 ||
                        pr.activeTray == 0 || pr.activeTray == 1 ||
                        pr.status == "running" || pr.status == "pause");
       drawDashboardSlotCard(slotX, ext, isActive, "ext", "ext");
@@ -4527,10 +4787,11 @@ void drawClockScreen() {
   int nozV = pr.nozzleTemp >= 0 ? (int)(pr.nozzleTemp + 0.5f) : -1;
   int bedV = pr.bedTemp >= 0 ? (int)(pr.bedTemp + 0.5f) : -1;
   String stStr = dashboardStatusText();
+  String stKey = clockStatusKey();
 
   bool bottomDirty =
       fullRedraw || (pr.online != cache.clockOnline) ||
-      (stStr != cache.clockStatus) || (pct != cache.clockProgressPct) ||
+      (stKey != cache.clockStatus) || (pct != cache.clockProgressPct) ||
       (nozV != cache.clockNozzleTemp) || (bedV != cache.clockBedTemp) ||
       (pr.remainingMin != cache.clockRemainingMin);
 
@@ -4544,12 +4805,10 @@ void drawClockScreen() {
       tft.setTextFont(2);
       tft.setTextDatum(TL_DATUM);
       tft.setTextColor(C_TEXT, C_CARD);
-      tft.drawString(modelStr.length() ? modelStr : "PRINT", 24, 166);
+      tft.drawString(fitTextToWidth(modelStr.length() ? modelStr : "PRINT", 2, 100, false), 24, 166);
 
-      // Status Pill on right
-      tft.setTextDatum(TR_DATUM);
-      tft.setTextColor(statusColor(), C_CARD);
-      tft.drawString(stStr, 204, 166);
+      // Status Pill on right (细分阶段：英文缩写 / 中文点阵)
+      drawHeaderStatus(204, 166, stStr, statusColor());
 
       // Progress Bar
       drawGlassProgress(24, 186, 180, 6, pct, 3);
@@ -4605,7 +4864,7 @@ void drawClockScreen() {
     }
 
     cache.clockOnline = pr.online;
-    cache.clockStatus = stStr;
+    cache.clockStatus = stKey;
     cache.clockProgressPct = pct;
     cache.clockNozzleTemp = nozV;
     cache.clockBedTemp = bedV;
@@ -4636,18 +4895,15 @@ String compactSpeedLabel() {
 
 void drawClassicHeaderSafe(const String &model, const String &status) {
   drawUiPanel(16, 16, 208, 26);
-  String modelText = fitTextToWidth(model.length() ? model : "--", 2, 100, false);
+  String modelText = fitTextToWidth(model.length() ? model : "--", 2, 90, false);
   String statusTextValue = status;
   statusTextValue.toUpperCase();
-  statusTextValue = fitTextToWidth(statusTextValue, 2, 58, false);
   tft.setTextDatum(TL_DATUM);
   tft.setTextFont(2);
   tft.setTextColor(C_TEXT, C_CARD);
   tft.setTextPadding(0);
   tft.drawString(modelText, 24, 20);
-  tft.setTextDatum(TR_DATUM);
-  tft.setTextColor(statusColor(), C_CARD);
-  tft.drawString(statusTextValue, 194, 20);
+  drawHeaderStatus(194, 20, statusTextValue, statusColor());
   tft.fillCircle(207, 29, 4, isPrinterOnline() ? statusColor() : C_ORANGE);
 }
 
@@ -4749,7 +5005,7 @@ void drawClassicBaseSafe() {
 }
 
 void updateClassicFieldsSafe() {
-  String currentStatus = statusText();
+  String currentStatus = headerStatusText(statusText());
   bool statusChanged = currentStatus != cache.status;
   String model = getTopLeftDisplayName();
   if (model != cache.model || statusChanged) {
@@ -4810,15 +5066,12 @@ void updateClassicFieldsSafe() {
 void drawDashboardHeaderSafe() {
   drawUiPanel(14, 10, 212, 22, C_CARD);
   String model = getTopLeftDisplayName();
-  String status = dashboardStatusText();
   tft.setTextDatum(TL_DATUM);
   tft.setTextFont(2);
   tft.setTextColor(C_TEXT, C_CARD);
   tft.setTextPadding(0);
-  tft.drawString(fitTextToWidth(model.length() ? model : "--", 2, 105, false), 24, 13);
-  tft.setTextDatum(TR_DATUM);
-  tft.setTextColor(statusColor(), C_CARD);
-  tft.drawString(fitTextToWidth(status, 2, 58, false), 196, 13);
+  tft.drawString(fitTextToWidth(model.length() ? model : "--", 2, 92, false), 24, 13);
+  drawHeaderStatus(196, 13, dashboardStatusText(), statusColor());
   tft.fillCircle(206, 21, 4, isPrinterOnline() ? statusColor() : C_ORANGE);
 }
 
@@ -4854,7 +5107,7 @@ void drawDashboardHeroSafe() {
 
 void drawDashboardFieldsSafe() {
   String headerModel = getTopLeftDisplayName();
-  String headerStatus = dashboardStatusText();
+  String headerStatus = headerStatusText(dashboardStatusText());
   bool headerDirty = headerModel != cache.model || headerStatus != cache.status;
   int progressValue = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : -1;
   bool heroDirty = progressValue != cache.progressPct ||
@@ -4877,10 +5130,8 @@ void drawClockStatusSafe() {
     tft.setTextFont(2);
     tft.setTextColor(C_TEXT, C_CARD);
     tft.setTextPadding(0);
-    tft.drawString(fitTextToWidth(model.length() ? model : "PRINT", 2, 105, false), 24, 166);
-    tft.setTextDatum(TR_DATUM);
-    tft.setTextColor(statusColor(), C_CARD);
-    tft.drawString(fitTextToWidth(status, 2, 58, false), 204, 166);
+    tft.drawString(fitTextToWidth(model.length() ? model : "PRINT", 2, 100, false), 24, 166);
+    drawHeaderStatus(204, 166, status, statusColor());
     int pct = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : 0;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
@@ -4922,7 +5173,7 @@ void drawClockScreenSafe() {
   int pct = pr.progress >= 0 ? (int)(pr.progress + 0.5f) : 0;
   int nozV = pr.nozzleTemp >= 0 ? (int)(pr.nozzleTemp + 0.5f) : -1;
   int bedV = pr.bedTemp >= 0 ? (int)(pr.bedTemp + 0.5f) : -1;
-  String statusTextValue = dashboardStatusText();
+  String statusTextValue = clockStatusKey();
   statusDirty = statusDirty || pr.online != cache.clockOnline ||
                 statusTextValue != cache.clockStatus ||
                 pct != cache.clockProgressPct ||
