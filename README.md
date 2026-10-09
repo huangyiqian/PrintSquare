@@ -41,6 +41,16 @@
 
 ## 🖼️ 界面与实机效果预览
 
+### 全息实际效果预览
+
+由 `tools\screen-sim.ps1` 按设备实时状态与固件坐标生成的屏幕仿真图（与实拍照片对照）：
+
+| 经典布局 (Classic) | 信息面板布局 (Dashboard) | 时钟布局 (Clock) |
+| :---: | :---: | :---: |
+| <img src="sim-output/sim-classic.png" width="240" /> | <img src="sim-output/sim-dashboard.png" width="240" /> | <img src="sim-output/sim-clock.png" width="240" /> |
+
+### 实机照片
+
 | 经典布局 (Classic) | 信息面板布局 (Dashboard) | 时钟布局 (Clock) |
 | :---: | :---: | :---: |
 | <img src="docs/images/jingdian.jpg" width="240" /> | <img src="docs/images/yibiaopan.jpg" width="240" /> | <img src="docs/images/shijian.jpg" width="240" /> |
