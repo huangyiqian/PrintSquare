@@ -56,7 +56,7 @@
 
 * **主控**：ESP8266EX / NodeMCU 兼容开发板
 * **屏幕**：240x240 7针 ST7789 SPI 显示屏
-* **外壳**：外壳模型可选择https://makerworld.com.cn/zh/models/2587841-cheng-ben-25-printsphere-litetuo-zhu-da-yin-zhuang#profileId-2978954
+* **外壳**：外壳模型推荐 [全息打印机进度监视器](https://makerworld.com.cn/zh/models/3052148-55yuan-cheng-ben-quan-xi-da-yin-ji-jin-du-jian-shi#profileId-3589179)
 * **接线参考 (PlatformIO 默认)**：
   * `CS`: GPIO 15
   * `DC`: GPIO 0
