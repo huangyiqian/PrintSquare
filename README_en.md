@@ -56,7 +56,7 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 * **MCU**: ESP8266EX / NodeMCU compatible board
 * **Display**: 240x240 7-pin ST7789 SPI LCD Screen
-* **Enclosure**: 外壳模型可选择https://makerworld.com.cn/zh/models/2587841-cheng-ben-25-printsphere-litetuo-zhu-da-yin-zhuang#profileId-2978954
+* **Enclosure**: Recommended enclosure model: [Holographic Printer Progress Monitor](https://makerworld.com/zh/models/3389228-cost-of-55-yuan-holographic-printer-progress-monit#profileId-3857168)
 * **Pin Connections (PlatformIO Default)**:
   * `CS`: GPIO 15
   * `DC`: GPIO 0
