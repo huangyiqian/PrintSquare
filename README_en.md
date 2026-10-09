@@ -43,11 +43,11 @@ This project is an enhanced and improved fork of the original [PrintSphere Lite]
 
 | Classic Layout | Dashboard Layout | Clock Layout |
 | :---: | :---: | :---: |
-| <img src="docs/images/classic.jpg" width="240" /> | <img src="docs/images/dashboard.jpg" width="240" /> | <img src="docs/images/clock.jpg" width="240" /> |
+| <img src="docs/images/jingdian.jpg" width="240" /> | <img src="docs/images/yibiaopan.jpg" width="240" /> | <img src="docs/images/shijian.jpg" width="240" /> |
 
 ### Web Backend Configuration Interface
 <p align="center">
-  <img src="docs/images/网页后台.png" width="560" />
+  <img src="docs/images/wangyehoutai.jpg" width="560" />
 </p>
 
 ---
