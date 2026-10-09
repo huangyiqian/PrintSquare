@@ -94,6 +94,23 @@ New-Item -ItemType Directory -Force -Path `
 Copy-Required $firmware (Join-Path $firmwareOut "printsquare-esp8266.bin")
 Copy-Required (Join-Path $root "README.md") (Join-CnPath $out $nameReadme ".md")
 
+# 使用说明.md 是 README.md 的副本，里面引用的预览图（docs/images/…）必须按相同的
+# 相对路径一起打进包，否则用户解压后看到的是空框。这里直接从 README 里解析引用，
+# 引用到不存在的图片会由 Copy-Required 直接报错，避免再次出现静默的坏图。
+$readmeText = Get-Content -LiteralPath (Join-Path $root "README.md") -Raw -Encoding UTF8
+$imageRefs = [regex]::Matches($readmeText, 'docs/images/[^"''\)\s>]+') |
+  ForEach-Object { $_.Value } | Sort-Object -Unique
+if (-not $imageRefs) {
+  throw "README.md 中未解析到任何 docs/images 引用，请检查打包逻辑"
+}
+foreach ($ref in $imageRefs) {
+  $rel = $ref -replace '/', '\'
+  $dst = Join-Path $out $rel
+  New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetDirectoryName($dst)) | Out-Null
+  Copy-Required (Join-Path $root $rel) $dst
+}
+Write-Host ("Included {0} preview image(s) referenced by README." -f $imageRefs.Count)
+
 # 只发 exe 方案：单文件 exe 内嵌 Node 运行时与 server.js，
 # 不再打包 node\、server.js、package.json、打开配置工具.bat（避免重复，zip 约 34MB）
 Copy-Required (Join-Path $sourceCompanionDir "README.md") (Join-Path $companionOut "README.md")
