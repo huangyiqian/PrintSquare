@@ -43,11 +43,11 @@
 
 | 经典布局 (Classic) | 信息面板布局 (Dashboard) | 时钟布局 (Clock) |
 | :---: | :---: | :---: |
-| <img src="docs/images/classic.jpg" width="240" /> | <img src="docs/images/dashboard.jpg" width="240" /> | <img src="docs/images/clock.jpg" width="240" /> |
+| <img src="docs/images/jingdian.jpg" width="240" /> | <img src="docs/images/yibiaopan.jpg" width="240" /> | <img src="docs/images/shijian.jpg" width="240" /> |
 
 ### Web 后端配置界面
 <p align="center">
-  <img src="docs/images/网页后台.png" width="560" />
+  <img src="docs/images/wangyehoutai.jpg" width="560" />
 </p>
 
 ---
