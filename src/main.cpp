@@ -21,7 +21,7 @@ WiFiServer webServer80(80);
 BearSSL::WiFiClientSecure mqttNet;
 
 #define LCD_BL_PIN 5
-const char *FIRMWARE_VERSION = "firmware-v0.5.40";
+const char *FIRMWARE_VERSION = "firmware-v0.5.40-rot";
 
 // Color definitions for BGR565 display panel ((B<<11) | (G<<5) | R)
 #define BG_BLACK 0x0000
@@ -171,6 +171,9 @@ struct PrinterState {
   bool amsExist = false;
   AmsTrayInfo amsSlots[4];
   AmsTrayInfo extSlot;
+  // 双打印机轮换：每台机独立记录"是否收到过真实状态"与最后遥测时间
+  bool statusReceived = false;
+  unsigned long lastActivity = 0;
 };
 
 struct StoredConfig {
@@ -195,6 +198,8 @@ struct StoredConfig {
   // 屏幕右上角状态文字语言，由 8081 网页的中英文切换写入：
   // "en" = 英文缩写（默认，保持原有行为）；"zh" = 中文两点阵字（cn_stage_glyphs.h）
   String uiLang = "en";
+  // >0：在已同步的多台打印机之间每 N 秒轮换显示（0 = 关闭）
+  uint16_t rotateSec = 0;
 };
 
 struct PrinterOption {
@@ -240,6 +245,10 @@ struct RenderCache {
 };
 
 PrinterState pr;
+// 双打印机轮换：pr 始终是"当前正在显示的那台"，prAlt 是另一台（后台照常收数据）
+PrinterState prAlt;
+String rotatePartnerSerial = "";
+unsigned long lastRotateSwapMs = 0;
 StoredConfig stored;
 RenderCache cache;
 PrinterOption printerOptions[MAX_PRINTER_OPTIONS];
@@ -373,7 +382,7 @@ float normalizeTemp(float value) {
   return value;
 }
 
-void storeNozzleTemp(int side, float temp, bool invertToolSide = true) {
+void storeNozzleTemp(int side, float temp, bool invertToolSide, PrinterState &t){
   if (temp == -999)
     return;
   temp = normalizeTemp(temp);
@@ -385,11 +394,11 @@ void storeNozzleTemp(int side, float temp, bool invertToolSide = true) {
       displaySide = 0;
   }
   if (displaySide == 0)
-    pr.leftNozzleTemp = temp;
+    t.leftNozzleTemp = temp;
   else if (displaySide == 1)
-    pr.rightNozzleTemp = temp;
-  if (pr.nozzleTemp < 0 || displaySide == 0)
-    pr.nozzleTemp = temp;
+    t.rightNozzleTemp = temp;
+  if (t.nozzleTemp < 0 || displaySide == 0)
+    t.nozzleTemp = temp;
 }
 
 float firstTempFromInfo(JsonArray info, float fallback) {
@@ -401,7 +410,7 @@ float firstTempFromInfo(JsonArray info, float fallback) {
   return fallback;
 }
 
-bool applyNozzleInfo(JsonArray info) {
+bool applyNozzleInfo(JsonArray info, PrinterState &t){
   if (info.isNull() || info.size() == 0)
     return false;
 
@@ -416,26 +425,26 @@ bool applyNozzleInfo(JsonArray info) {
     }
     int id = jsonInt(item["id"], index);
     if (id == 0 || id == 1) {
-      storeNozzleTemp(id, temp);
+      storeNozzleTemp(id, temp, true, t);
       any = true;
     } else if (!dual) {
-      pr.nozzleTemp = normalizeTemp(temp);
+      t.nozzleTemp = normalizeTemp(temp);
       any = true;
     }
     index++;
   }
   if (dual && any)
-    pr.dualNozzle = true;
+    t.dualNozzle = true;
   return any;
 }
 
-bool applyNestedNozzleTemps(JsonObject print) {
+bool applyNestedNozzleTemps(JsonObject print, PrinterState &t){
   JsonObject device = print["device"].as<JsonObject>();
   if (device.isNull())
     return false;
 
-  bool got = applyNozzleInfo(device["extruder"]["info"].as<JsonArray>());
-  if (applyNozzleInfo(device["nozzle"]["info"].as<JsonArray>()))
+  bool got = applyNozzleInfo(device["extruder"]["info"].as<JsonArray>(), t);
+  if (applyNozzleInfo(device["nozzle"]["info"].as<JsonArray>(), t))
     got = true;
   return got;
 }
@@ -569,40 +578,40 @@ void applyBrightnessSchedule() {
   }
 }
 
-void resetLivePrintFields() {
-  pr.progress = -1;
-  pr.nozzleTemp = -1;
-  pr.leftNozzleTemp = -1;
-  pr.rightNozzleTemp = -1;
-  pr.dualNozzle = false;
-  pr.bedTemp = -1;
-  pr.chamberTemp = -1;
-  pr.remainingMin = -1;
-  pr.currentLayer = -1;
-  pr.totalLayers = -1;
-  pr.status = "prepare";
-  pr.activeTray = -1;
-  pr.spdLvl = 1;
-  pr.spdMag = 100;
-  pr.amsExist = false;
-  pr.extSlot.valid = false;
-  pr.extSlot.trayColor = 0;
-  pr.extSlot.remain = -1;
-  pr.extSlot.trayType = "";
-  pr.extSlot.traySubBrands = "";
-  pr.extSlot.tagUid = "";
-  pr.extSlot.isOfficial = false;
+void resetLivePrintFields(PrinterState &t){
+  t.progress = -1;
+  t.nozzleTemp = -1;
+  t.leftNozzleTemp = -1;
+  t.rightNozzleTemp = -1;
+  t.dualNozzle = false;
+  t.bedTemp = -1;
+  t.chamberTemp = -1;
+  t.remainingMin = -1;
+  t.currentLayer = -1;
+  t.totalLayers = -1;
+  t.status = "prepare";
+  t.activeTray = -1;
+  t.spdLvl = 1;
+  t.spdMag = 100;
+  t.amsExist = false;
+  t.extSlot.valid = false;
+  t.extSlot.trayColor = 0;
+  t.extSlot.remain = -1;
+  t.extSlot.trayType = "";
+  t.extSlot.traySubBrands = "";
+  t.extSlot.tagUid = "";
+  t.extSlot.isOfficial = false;
   for (int i = 0; i < 4; i++) {
-    pr.amsSlots[i].valid = false;
-    pr.amsSlots[i].trayColor = 0;
-    pr.amsSlots[i].remain = -1;
-    pr.amsSlots[i].trayType = "";
-    pr.amsSlots[i].traySubBrands = "";
-    pr.amsSlots[i].tagUid = "";
-    pr.amsSlots[i].isOfficial = false;
+    t.amsSlots[i].valid = false;
+    t.amsSlots[i].trayColor = 0;
+    t.amsSlots[i].remain = -1;
+    t.amsSlots[i].trayType = "";
+    t.amsSlots[i].traySubBrands = "";
+    t.amsSlots[i].tagUid = "";
+    t.amsSlots[i].isOfficial = false;
   }
-  printerStatusReceived = false;
-  pr.online = false;
+  t.statusReceived = false;
+  t.online = false;
   displayDirty = true;
 }
 
@@ -659,6 +668,7 @@ bool saveStoredConfig() {
   doc["brightness"] = stored.brightness;
   doc["brightness_schedule"] = stored.brightnessSchedule;
   doc["lang"] = stored.uiLang;
+  doc["rotate_sec"] = stored.rotateSec;
   serializeJson(doc, file);
   file.close();
   return true;
@@ -729,6 +739,48 @@ void loadPrinterOptions() {
   loadPrinterArray(doc["printers"].as<JsonArray>());
 }
 
+String printerOptionNameFor(const String &serial) {
+  for (uint8_t i = 0; i < printerOptionCount; ++i) {
+    if (printerOptions[i].serial == serial)
+      return printerOptions[i].name.length() ? printerOptions[i].name : serial;
+  }
+  return "";
+}
+
+String printerOptionModelFor(const String &serial) {
+  for (uint8_t i = 0; i < printerOptionCount; ++i) {
+    if (printerOptions[i].serial == serial)
+      return printerOptions[i].model;
+  }
+  return "";
+}
+
+// 轮换的第二台 = 已同步列表里第一台"不是当前选定"的打印机
+void refreshRotatePartner() {
+  String partner = "";
+  if (stored.rotateSec > 0 && printerOptionCount >= 2) {
+    for (uint8_t i = 0; i < printerOptionCount; ++i) {
+      if (printerOptions[i].serial != stored.serial) {
+        partner = printerOptions[i].serial;
+        break;
+      }
+    }
+  }
+  if (partner != rotatePartnerSerial) {
+    rotatePartnerSerial = partner;
+    prAlt = PrinterState();
+    prAlt.serial = partner;
+    prAlt.displayName = printerOptionNameFor(partner);
+    prAlt.model = printerOptionModelFor(partner);
+    lastRotateSwapMs = millis();
+  }
+}
+
+bool rotationEnabled() {
+  return stored.rotateSec > 0 && rotatePartnerSerial.length() > 0 &&
+         printerOptionCount >= 2;
+}
+
 void loadStoredConfig() {
   if (!LittleFS.begin())
     return;
@@ -765,6 +817,11 @@ void loadStoredConfig() {
   {
     const char *savedLang = doc["lang"] | "en";
     stored.uiLang = (strcmp(savedLang, "zh") == 0) ? "zh" : "en";
+  }
+  {
+    int savedRotate = doc["rotate_sec"] | doc["rotate_interval"] | 0;
+    stored.rotateSec =
+        (savedRotate >= 3 && savedRotate <= 3600) ? (uint16_t)savedRotate : 0;
   }
   pr.serial = stored.serial;
   pr.displayName = stored.name;
@@ -810,6 +867,10 @@ String statusJson() {
   doc["brightness"] = appliedBrightness;
   doc["free_heap"] = ESP.getFreeHeap();
   doc["printer_count"] = printerOptionCount;
+  doc["rotate_sec"] = stored.rotateSec;
+  doc["rotate_active"] = rotationEnabled() ? 1 : 0;
+  doc["rotate_partner"] = rotatePartnerSerial;
+  doc["display_serial"] = pr.serial.length() ? pr.serial : stored.serial;
   doc["online"] = pr.online;
   doc["status"] = pr.status;
   doc["stage_cur"] = pr.stageCur;
@@ -1002,10 +1063,18 @@ bool selectPrinterBySerial(const String &serial) {
         pr.totalLayers = -1;
         pr.status = "prepare";
         printerStatusReceived = false;
+        pr.statusReceived = false;
+        pr.lastActivity = 0;
         pr.online = false;
         cache.baseDrawn = false;
         mqttReconnectPending = true;
       }
+      refreshRotatePartner();
+      prAlt = PrinterState();
+      prAlt.serial = rotatePartnerSerial;
+      prAlt.displayName = printerOptionNameFor(rotatePartnerSerial);
+      prAlt.model = printerOptionModelFor(rotatePartnerSerial);
+      lastRotateSwapMs = millis();
       saveStoredConfig();
       displayDirty = true;
       return true;
@@ -1509,6 +1578,25 @@ void sendEspHomeHtml(WiFiClient &realClient) {
   if (currentMirror == 1)
     client.print( F(" class=\"active\""));
   client.print( F(">左右镜像</button>"));
+  client.print( F("</div>"));
+  client.print( F("<div class=\"label\" style=\"margin-top:14px\">打印机轮换（已同步 ≥2 台时生效）</div><div class=\"segmented rotate-segmented\">"));
+  uint16_t currentRotate = stored.rotateSec;
+  client.print( F("<button id=\"rg0\" onclick=\"setRotate(0)\""));
+  if (currentRotate == 0)
+    client.print( F(" class=\"active\""));
+  client.print( F(">关闭</button>"));
+  client.print( F("<button id=\"rg5\" onclick=\"setRotate(5)\""));
+  if (currentRotate == 5)
+    client.print( F(" class=\"active\""));
+  client.print( F(">5 秒</button>"));
+  client.print( F("<button id=\"rg10\" onclick=\"setRotate(10)\""));
+  if (currentRotate == 10)
+    client.print( F(" class=\"active\""));
+  client.print( F(">10 秒</button>"));
+  client.print( F("<button id=\"rg30\" onclick=\"setRotate(30)\""));
+  if (currentRotate == 30)
+    client.print( F(" class=\"active\""));
+  client.print( F(">30 秒</button>"));
   client.print( F("</div></div>"));
 
   client.print( F("<div class=\"paired-grid\">"));
@@ -1590,6 +1678,8 @@ void sendEspHomeHtml(WiFiClient &realClient) {
     "'屏幕布局':'Screen layout','经典':'Classic','面板':'Dashboard','时钟':'Clock',"
     "'屏幕旋转':'Rotation','屏幕镜像（半透半反镜用）':'Mirror (for half-mirror builds)',"
     "'无':'Off','左右镜像':'Left-right mirror',"
+    "'打印机轮换（已同步 ≥2 台时生效）':'Printer rotation (needs ≥2 synced printers)',"
+    "'关闭':'Off','5 秒':'5 s','10 秒':'10 s','30 秒':'30 s',"
     "'亮度定时':'Brightness schedule','夜间段':'Night slot','夜间亮度':'Night brightness',"
     "'日间段':'Day slot','日间亮度':'Day brightness',"
     "'保存并推送到设备':'Save and push to device',"
@@ -1856,6 +1946,11 @@ void sendEspHomeHtml(WiFiClient &realClient) {
         "      document.querySelectorAll('.mirror-segmented button').forEach(b=>b.classList.remove('active'));\n"
         "      var mirrorBtn=document.getElementById('mk'+mirror);if(mirrorBtn)mirrorBtn.classList.add('active');\n"
         "    }\n"
+        "    if(d.rotate_sec!==undefined){\n"
+        "      var rs=Number(d.rotate_sec);\n"
+        "      document.querySelectorAll('.rotate-segmented button').forEach(b=>b.classList.remove('active'));\n"
+        "      var rsBtn=document.getElementById('rg'+rs);if(rsBtn)rsBtn.classList.add('active');\n"
+        "    }\n"
         "    updatePrinterUI(d);\n"
         "}\n"
         "function refreshStatus(){\n"
@@ -1891,6 +1986,10 @@ void sendEspHomeHtml(WiFiClient &realClient) {
             "button').forEach(b=>b.classList.remove('active'));const "
             "btn=document.getElementById('mk'+v);if(btn)btn.classList.add('active');"
             "postConfig({mirror:Number(v)});}\n"));
+  client.print( F("function setRotate(v){document.querySelectorAll('.rotate-segmented "
+            "button').forEach(b=>b.classList.remove('active'));const "
+            "btn=document.getElementById('rg'+v);if(btn)btn.classList.add('active');"
+            "postConfig({rotate_sec:Number(v)});}\n"));
   client.print( F("function toggleSchedule(){var "
             "e=document.getElementById('schedFields'),c=document."
             "getElementById('bse');e.style.display=c.checked?'block':'none';"
@@ -1996,6 +2095,16 @@ String applyConfigBody(const String &body, int &statusCode) {
     requestedMirror = doc["display_mirror"].as<int>();
   else if (doc["display_mirror"].is<const char *>())
     requestedMirror = atoi(doc["display_mirror"].as<const char *>());
+  int requestedRotate = -1;
+  if (doc["rotate_sec"].is<int>() || doc["rotate_sec"].is<unsigned int>())
+    requestedRotate = doc["rotate_sec"].as<int>();
+  else if (doc["rotate_sec"].is<const char *>())
+    requestedRotate = atoi(doc["rotate_sec"].as<const char *>());
+  else if (doc["rotate_interval"].is<int>() ||
+           doc["rotate_interval"].is<unsigned int>())
+    requestedRotate = doc["rotate_interval"].as<int>();
+  else if (doc["rotate_interval"].is<const char *>())
+    requestedRotate = atoi(doc["rotate_interval"].as<const char *>());
   const char *aliasBitmapHex = doc["alias_bitmap_hex"] | "";
   const char *langReq = doc["lang"] | doc["ui_lang"] | "";
   const char *printersPayload = doc["printers_json"] | "";
@@ -2057,12 +2166,15 @@ String applyConfigBody(const String &body, int &statusCode) {
       pr.totalLayers = -1;
       pr.status = "prepare";
       printerStatusReceived = false;
+      pr.statusReceived = false;
+      pr.lastActivity = 0;
       pr.online = false;
       mqttChanged = true;
     } else {
       pr.serial = serial;
     }
   }
+  refreshRotatePartner();
   if (name[0]) {
     stored.name = name;
     pr.displayName = name;
@@ -2126,6 +2238,16 @@ String applyConfigBody(const String &body, int &statusCode) {
       cache = RenderCache();
     }
   }
+  bool rotateChanged = false;
+  if (requestedRotate >= 0) {
+    uint16_t nextRotate = (requestedRotate >= 3 && requestedRotate <= 3600)
+                              ? (uint16_t)requestedRotate
+                              : 0;
+    if (stored.rotateSec != nextRotate) {
+      stored.rotateSec = nextRotate;
+      rotateChanged = true;
+    }
+  }
   if (aliasBitmapHex[0] || doc["alias_bitmap_hex"].is<const char *>()) {
     stored.aliasBitmapHex = aliasBitmapHex;
     stored.aliasBitmapW = doc["alias_bitmap_w"] | 0;
@@ -2148,11 +2270,31 @@ String applyConfigBody(const String &body, int &statusCode) {
     }
   }
   bool orientationChanged = rotationChanged || mirrorChanged;
-  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged || scheduleChanged || layoutChanged || orientationChanged || langChanged;
+  bool anyConfigChanged = wifiChanged || mqttChanged || brightnessChanged ||
+                          scheduleChanged || layoutChanged || orientationChanged ||
+                          langChanged || rotateChanged;
   bool ok = anyConfigChanged ? saveStoredConfig() : true;
   if (orientationChanged) {
     applyDisplayOrientation();
     tft.fillScreen(BG_BLACK);
+  }
+  if (rotateChanged) {
+    // 关闭轮换：先把显示切回用户选定的那台（此时 prAlt 可能已被刷新/清空）
+    if (stored.rotateSec == 0 && stored.serial.length() &&
+        pr.serial != stored.serial) {
+      PrinterState fresh;
+      fresh.serial = stored.serial;
+      fresh.displayName = stored.name;
+      fresh.model = stored.model;
+      pr = fresh;
+      cache = RenderCache();
+      printerStatusReceived = false;
+      lastPrinterActivity = 0;
+    }
+    // 轮换开关变化需要重连一次：开 → 多订阅一台；关 → 退回单台
+    refreshRotatePartner();
+    mqttReconnectPending = true;
+    lastRotateSwapMs = 0;
   }
   if (wifiChanged) {
     wifiReconnectPending = true;
@@ -2173,6 +2315,7 @@ String applyConfigBody(const String &body, int &statusCode) {
   outDoc["layout"] = stored.layout;
   outDoc["rotation"] = stored.rotation;
   outDoc["mirror"] = stored.mirror;
+  outDoc["rotate_sec"] = stored.rotateSec;
   String out;
   serializeJson(outDoc, out);
   statusCode = ok ? 200 : 500;
@@ -2234,6 +2377,7 @@ String configBodyFromQuery(const String &query) {
           key == "layout" || key == "display_layout" ||
           key == "rotation" || key == "display_rotation" ||
           key == "mirror" || key == "display_mirror" ||
+          key == "rotate_sec" || key == "rotate_interval" ||
           key == "alias_bitmap_hex" || key == "alias_bitmap_w" ||
           key == "alias_bitmap_h" || key == "printers_json" ||
           key == "brightness" || key == "brightness_percent") {
@@ -2542,9 +2686,14 @@ bool mqttConfigReady() {
          stored.token.length() > 0 && stored.serial.length() > 0;
 }
 
-String reportTopic() { return String("device/") + stored.serial + "/report"; }
-
-String requestTopic() { return String("device/") + stored.serial + "/request"; }
+String reportTopicFor(const String &serial) {
+  return String("device/") + serial + "/report";
+}
+String requestTopicFor(const String &serial) {
+  return String("device/") + serial + "/request";
+}
+String reportTopic() { return reportTopicFor(stored.serial); }
+String requestTopic() { return requestTopicFor(stored.serial); }
 
 void mqttBufferRemainingLength(uint8_t *buf, size_t &pos, size_t len) {
   do {
@@ -2683,6 +2832,9 @@ bool mqttSendConnect() {
   return false;
 }
 
+// 先到的 PUBLISH 也要投递，不能因为等 SUBACK 而丢数据/误判订阅失败
+void mqttDispatchPublish(uint8_t header, size_t len);
+
 bool mqttSendSubscribe(const String &topic) {
   uint16_t id = mqttPacketId++;
   if (mqttPacketId == 0)
@@ -2703,15 +2855,26 @@ bool mqttSendSubscribe(const String &topic) {
     return false;
   }
 
-  uint8_t header = 0;
-  size_t len = 0;
-  if (!mqttReadPacket(&header, mqttBuf, sizeof(mqttBuf), &len, 6000)) {
-    lastMqttError = "SUBACK timeout";
-    Serial.println("Cloud MQTT SUBACK timeout");
-    return false;
+  // 等 SUBACK 期间可能先收到 PUBLISH（另一台的状态推送），转发给解析器而不是丢掉
+  unsigned long deadline = millis() + 8000;
+  while ((long)(deadline - millis()) > 0) {
+    uint8_t header = 0;
+    size_t len = 0;
+    if (!mqttReadPacket(&header, mqttBuf, sizeof(mqttBuf), &len, 1500))
+      continue;
+    uint8_t type = header >> 4;
+    if (type == 9)
+      return true;
+    if (type == 3 && len > 2) {
+      lastMqttDataReceived = millis();
+      mqttDispatchPublish(header, len);
+    } else if (type == 14) {
+      return false;
+    }
   }
-  uint8_t type = header >> 4;
-  return type == 9;
+  lastMqttError = "SUBACK timeout";
+  Serial.println("Cloud MQTT SUBACK timeout");
+  return false;
 }
 
 bool mqttSendPublish(const String &topic, const char *payload) {
@@ -2759,22 +2922,33 @@ void mqttSendPuback(uint16_t packetId) {
   }
 }
 
-void publishMqttRequest(const char *payload) {
-  if (!mqttNet.connected())
+void publishMqttRequestTo(const String &serial, const char *payload) {
+  if (!mqttNet.connected() || !serial.length())
     return;
-  String topic = requestTopic();
+  String topic = requestTopicFor(serial);
   if (!mqttSendPublish(topic, payload)) {
     triggerMqttReconnect("PUBLISH write failed");
   }
 }
 
+void publishMqttRequest(const char *payload) {
+  publishMqttRequestTo(stored.serial, payload);
+}
+
 void requestPrinterState() {
-  publishMqttRequest(
+  publishMqttRequestTo(
+      stored.serial,
       "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}");
+  if (stored.rotateSec > 0 && rotatePartnerSerial.length() &&
+      rotatePartnerSerial != stored.serial) {
+    publishMqttRequestTo(
+        rotatePartnerSerial,
+        "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}");
+  }
   lastMqttRequest = millis();
 }
 
-bool applyFlatToolNozzles(JsonObject print) {
+bool applyFlatToolNozzles(JsonObject print, PrinterState &t){
   static const char *const tool0Keys[] = {"tool0_nozzle_temp",
                                           "tool0_nozzle_temper"};
   static const char *const tool1Keys[] = {"tool1_nozzle_temp",
@@ -2787,37 +2961,37 @@ bool applyFlatToolNozzles(JsonObject print) {
   float f = jsonFloatForKeys(print, tool0Keys,
                              sizeof(tool0Keys) / sizeof(tool0Keys[0]), -999);
   if (f != -999) {
-    storeNozzleTemp(0, f, true);
+    storeNozzleTemp(0, f, true, t);
     got = true;
   }
   f = jsonFloatForKeys(print, tool1Keys,
                        sizeof(tool1Keys) / sizeof(tool1Keys[0]), -999);
   if (f != -999) {
-    storeNozzleTemp(1, f, true);
-    pr.dualNozzle = true;
+    storeNozzleTemp(1, f, true, t);
+    t.dualNozzle = true;
     got = true;
   }
   f = jsonFloatForKeys(print, leftKeys, sizeof(leftKeys) / sizeof(leftKeys[0]),
                        -999);
   if (f != -999) {
-    storeNozzleTemp(0, f, false);
+    storeNozzleTemp(0, f, false, t);
     got = true;
   }
   f = jsonFloatForKeys(print, rightKeys,
                        sizeof(rightKeys) / sizeof(rightKeys[0]), -999);
   if (f != -999) {
-    storeNozzleTemp(1, f, false);
-    pr.dualNozzle = true;
+    storeNozzleTemp(1, f, false, t);
+    t.dualNozzle = true;
     got = true;
   }
   return got;
 }
 
-void applyPrint(JsonObject print) {
+void applyPrint(JsonObject print, PrinterState &t){
   if (print.isNull())
     return;
   // 收到真实打印遥测 → 刷新"打印机活跃"时间戳（用于关机离线判定）
-  lastPrinterActivity = millis();
+  t.lastActivity = millis();
 
   static const char *const statusKeys[] = {
       "gcode_state", "print_status", "printStatus", "status",
@@ -2825,9 +2999,9 @@ void applyPrint(JsonObject print) {
   const char *status = jsonStringForKeys(
       print, statusKeys, sizeof(statusKeys) / sizeof(statusKeys[0]));
   if (status[0]) {
-    pr.status = status;
-    pr.status.toLowerCase();
-    printerStatusReceived = true;
+    t.status = status;
+    t.status.toLowerCase();
+    t.statusReceived = true;
   }
 
   static const char *const progressKeys[] = {
@@ -2837,11 +3011,11 @@ void applyPrint(JsonObject print) {
       jsonFloatForKeys(print, progressKeys,
                        sizeof(progressKeys) / sizeof(progressKeys[0]), -999);
   if (f != -999)
-    pr.progress = normalizePercent(f);
+    t.progress = normalizePercent(f);
 
-  bool gotNestedNozzle = applyNestedNozzleTemps(print);
-  bool gotFlatToolNozzle = applyFlatToolNozzles(print);
-  if (!pr.dualNozzle && !gotNestedNozzle && !gotFlatToolNozzle) {
+  bool gotNestedNozzle = applyNestedNozzleTemps(print, t);
+  bool gotFlatToolNozzle = applyFlatToolNozzles(print, t);
+  if (!t.dualNozzle && !gotNestedNozzle && !gotFlatToolNozzle) {
     static const char *const nozzleKeys[] = {
         "nozzle_temper",     "nozzle_temp", "nozzle_temperature",
         "nozzleTemperature", "hotend_temp", "hotend_temperature"};
@@ -2850,7 +3024,7 @@ void applyPrint(JsonObject print) {
     if (f == -999)
       f = nestedNozzleTemp(print, -999);
     if (f != -999)
-      pr.nozzleTemp = normalizeTemp(f);
+      t.nozzleTemp = normalizeTemp(f);
   }
 
   static const char *const bedKeys[] = {
@@ -2861,14 +3035,14 @@ void applyPrint(JsonObject print) {
   if (f == -999)
     f = nestedBedTemp(print, -999);
   if (f != -999)
-    pr.bedTemp = f;
+    t.bedTemp = f;
 
   static const char *const modelKeys[] = {"model", "dev_model_name",
                                           "dev_product_name", "product_name"};
   const char *model = jsonStringForKeys(
       print, modelKeys, sizeof(modelKeys) / sizeof(modelKeys[0]));
   if (model[0])
-    pr.model = model;
+    t.model = model;
 
   static const char *const chamberKeys[] = {"chamber_temper",
                                             "chamber_temp",
@@ -2885,7 +3059,7 @@ void applyPrint(JsonObject print) {
                                             "ctt"};
   f = jsonFloatForKeys(print, chamberKeys,
                        sizeof(chamberKeys) / sizeof(chamberKeys[0]), -999);
-  String chamberModel = pr.model.length() ? pr.model : stored.model;
+  String chamberModel = t.model.length() ? t.model : stored.model;
   if ((f == -999 || f < 0 || f > 120) &&
       chamberFallbackAllowedForModel(chamberModel)) {
     f = jsonFloat(print["device"]["ctc"]["info"]["temp"], -999);
@@ -2895,7 +3069,7 @@ void applyPrint(JsonObject print) {
     f = jsonFloat(print["info"]["temp"], -999);
   }
   if (f != -999 && f > -50 && f < 120)
-    pr.chamberTemp = f;
+    t.chamberTemp = f;
 
   static const char *const remainingMinuteKeys[] = {
       "mc_remaining_time", "remaining_minutes", "remainingMinutes",
@@ -2914,7 +3088,7 @@ void applyPrint(JsonObject print) {
       i = (seconds + 59) / 60;
   }
   if (i != -999)
-    pr.remainingMin = i;
+    t.remainingMin = i;
 
   static const char *const currentLayerKeys[] = {"layer_num", "current_layer",
                                                  "currentLayer", "layer"};
@@ -2922,7 +3096,7 @@ void applyPrint(JsonObject print) {
                      sizeof(currentLayerKeys) / sizeof(currentLayerKeys[0]),
                      -999);
   if (i != -999)
-    pr.currentLayer = i;
+    t.currentLayer = i;
 
   static const char *const totalLayerKeys[] = {"total_layer_num",
                                                "total_layers", "totalLayers",
@@ -2930,29 +3104,29 @@ void applyPrint(JsonObject print) {
   i = jsonIntForKeys(print, totalLayerKeys,
                      sizeof(totalLayerKeys) / sizeof(totalLayerKeys[0]), -999);
   if (i != -999)
-    pr.totalLayers = i;
+    t.totalLayers = i;
 
   // 细分阶段：stg_cur 是整数（X1 空闲 -1 / P1 空闲 255），部分固件回传字符串。
   static const char *const stageKeys[] = {"stg_cur", "stgCur"};
   i = jsonIntForKeys(print, stageKeys, sizeof(stageKeys) / sizeof(stageKeys[0]),
                      -999);
   if (i != -999)
-    pr.stageCur = i;
+    t.stageCur = i;
 
   // Check AMS presence via ams_exist_bits
   if (!print["ams_exist_bits"].isNull()) {
     const char *bits = print["ams_exist_bits"];
     if (bits) {
-      pr.amsExist = (atoi(bits) > 0);
+      t.amsExist = (atoi(bits) > 0);
     } else {
-      pr.amsExist = (print["ams_exist_bits"].as<int>() > 0);
+      t.amsExist = (print["ams_exist_bits"].as<int>() > 0);
     }
   } else if (!print["ams"]["ams_exist_bits"].isNull()) {
     const char *bits = print["ams"]["ams_exist_bits"];
     if (bits) {
-      pr.amsExist = (atoi(bits) > 0);
+      t.amsExist = (atoi(bits) > 0);
     } else {
-      pr.amsExist = (print["ams"]["ams_exist_bits"].as<int>() > 0);
+      t.amsExist = (print["ams"]["ams_exist_bits"].as<int>() > 0);
     }
   }
 
@@ -2962,14 +3136,14 @@ void applyPrint(JsonObject print) {
     if (!amsObj["tray_now"].isNull()) {
       const char *tn = amsObj["tray_now"];
       if (tn)
-        pr.activeTray = atoi(tn);
+        t.activeTray = atoi(tn);
       else
-        pr.activeTray = amsObj["tray_now"] | -1;
+        t.activeTray = amsObj["tray_now"] | -1;
     }
     JsonArray amsArray = amsObj["ams"];
     if (!amsArray.isNull()) {
       if (amsArray.size() > 0) {
-        pr.amsExist = true;
+        t.amsExist = true;
         JsonObject firstAms = amsArray[0];
         JsonArray trays = firstAms["tray"];
         if (!trays.isNull()) {
@@ -2978,28 +3152,28 @@ void applyPrint(JsonObject print) {
             JsonObject tray = trays[k];
             const char *tt = tray["tray_type"];
             if (tt && strlen(tt) > 0) {
-              pr.amsSlots[k].valid = true;
-              pr.amsSlots[k].trayType = tt;
-              pr.amsSlots[k].traySubBrands = tray["tray_sub_brands"] | "";
+              t.amsSlots[k].valid = true;
+              t.amsSlots[k].trayType = tt;
+              t.amsSlots[k].traySubBrands = tray["tray_sub_brands"] | "";
               const char *tag = tray["tag_uid"];
-              pr.amsSlots[k].tagUid = tag ? tag : "";
-              pr.amsSlots[k].isOfficial = isOfficialTag(tag);
+              t.amsSlots[k].tagUid = tag ? tag : "";
+              t.amsSlots[k].isOfficial = isOfficialTag(tag);
               const char *tc = tray["tray_color"];
               if (tc && strlen(tc) >= 8) {
-                pr.amsSlots[k].trayColor = strtoul(tc, nullptr, 16);
+                t.amsSlots[k].trayColor = strtoul(tc, nullptr, 16);
               } else if (tc && strlen(tc) >= 6) {
-                pr.amsSlots[k].trayColor = strtoul(tc, nullptr, 16) << 8;
+                t.amsSlots[k].trayColor = strtoul(tc, nullptr, 16) << 8;
               }
-              pr.amsSlots[k].remain = tray["remain"] | -1;
+              t.amsSlots[k].remain = tray["remain"] | -1;
             } else {
-              pr.amsSlots[k].valid = false;
-              pr.amsSlots[k].isOfficial = false;
-              pr.amsSlots[k].tagUid = "";
+              t.amsSlots[k].valid = false;
+              t.amsSlots[k].isOfficial = false;
+              t.amsSlots[k].tagUid = "";
             }
           }
         }
       } else {
-        pr.amsExist = false;
+        t.amsExist = false;
       }
     }
   }
@@ -3012,88 +3186,88 @@ void applyPrint(JsonObject print) {
   if (!vtObj.isNull()) {
     const char *tt = vtObj["tray_type"];
     if (tt && strlen(tt) > 0) {
-      pr.extSlot.valid = true;
-      pr.extSlot.trayType = tt;
-      pr.extSlot.traySubBrands = vtObj["tray_sub_brands"] | "";
+      t.extSlot.valid = true;
+      t.extSlot.trayType = tt;
+      t.extSlot.traySubBrands = vtObj["tray_sub_brands"] | "";
       const char *tag = vtObj["tag_uid"];
-      pr.extSlot.tagUid = tag ? tag : "";
-      pr.extSlot.isOfficial = isOfficialTag(tag);
+      t.extSlot.tagUid = tag ? tag : "";
+      t.extSlot.isOfficial = isOfficialTag(tag);
       const char *tc = vtObj["tray_color"];
       if (tc && strlen(tc) >= 8) {
-        pr.extSlot.trayColor = strtoul(tc, nullptr, 16);
+        t.extSlot.trayColor = strtoul(tc, nullptr, 16);
       } else if (tc && strlen(tc) >= 6) {
-        pr.extSlot.trayColor = strtoul(tc, nullptr, 16) << 8;
+        t.extSlot.trayColor = strtoul(tc, nullptr, 16) << 8;
       }
-      pr.extSlot.remain = vtObj["remain"] | -1;
+      t.extSlot.remain = vtObj["remain"] | -1;
     } else {
       // vt_tray 存在但 tray_type 为空 → 外挂槽确实没有料盘。必须显式清掉旧值，
       // 否则一旦被写过就会永久残留（applyPrint 里没有别的地方会复位它）。
-      pr.extSlot.valid = false;
-      pr.extSlot.trayType = "";
-      pr.extSlot.traySubBrands = "";
-      pr.extSlot.tagUid = "";
-      pr.extSlot.trayColor = 0;
-      pr.extSlot.remain = -1;
-      pr.extSlot.isOfficial = false;
+      t.extSlot.valid = false;
+      t.extSlot.trayType = "";
+      t.extSlot.traySubBrands = "";
+      t.extSlot.tagUid = "";
+      t.extSlot.trayColor = 0;
+      t.extSlot.remain = -1;
+      t.extSlot.isOfficial = false;
     }
   }
   // 顶层 print.tray_type / filament_type 表示"当前正在使用的耗材"：AMS 打印时它来自
   // AMS 槽位，并不是外挂料盘。只有"设备没有 AMS"或"当前明确选中外挂料盘(tray_now=254)"
   // 时才能用它推断外挂槽，否则网页会多出一个并不存在的外挂料盘（换料时尤其明显）。
-  if ((!pr.amsExist || pr.activeTray == 254) &&
+  if ((!t.amsExist || t.activeTray == 254) &&
       (!print["tray_type"].isNull() || !print["filament_type"].isNull())) {
     const char *tt = print["tray_type"];
     if (!tt || strlen(tt) == 0)
       tt = print["filament_type"];
     if (tt && strlen(tt) > 0) {
-      pr.extSlot.valid = true;
-      pr.extSlot.trayType = tt;
+      t.extSlot.valid = true;
+      t.extSlot.trayType = tt;
       if (!print["tray_sub_brands"].isNull())
-        pr.extSlot.traySubBrands = print["tray_sub_brands"].as<const char *>();
+        t.extSlot.traySubBrands = print["tray_sub_brands"].as<const char *>();
       if (!print["tag_uid"].isNull()) {
         const char *tag = print["tag_uid"];
-        pr.extSlot.tagUid = tag ? tag : "";
-        pr.extSlot.isOfficial = isOfficialTag(tag);
+        t.extSlot.tagUid = tag ? tag : "";
+        t.extSlot.isOfficial = isOfficialTag(tag);
       }
       const char *tc = print["tray_color"];
       if (tc && strlen(tc) >= 8) {
-        pr.extSlot.trayColor = strtoul(tc, nullptr, 16);
+        t.extSlot.trayColor = strtoul(tc, nullptr, 16);
       } else if (tc && strlen(tc) >= 6) {
-        pr.extSlot.trayColor = strtoul(tc, nullptr, 16) << 8;
+        t.extSlot.trayColor = strtoul(tc, nullptr, 16) << 8;
       }
       if (!print["remain"].isNull()) {
-        pr.extSlot.remain = print["remain"] | -1;
+        t.extSlot.remain = print["remain"] | -1;
       }
     }
   }
 
   if (!print["subtray_id"].isNull()) {
-    pr.activeTray = print["subtray_id"] | pr.activeTray;
+    t.activeTray = print["subtray_id"] | t.activeTray;
   } else if (!print["tray_now"].isNull()) {
     const char *tn = print["tray_now"];
     if (tn)
-      pr.activeTray = atoi(tn);
+      t.activeTray = atoi(tn);
     else
-      pr.activeTray = print["tray_now"] | pr.activeTray;
+      t.activeTray = print["tray_now"] | t.activeTray;
   }
 
   if (!print["spd_lvl"].isNull())
-    pr.spdLvl = print["spd_lvl"] | 1;
+    t.spdLvl = print["spd_lvl"] | 1;
   else if (!print["spdLvl"].isNull())
-    pr.spdLvl = print["spdLvl"] | 1;
+    t.spdLvl = print["spdLvl"] | 1;
 
   if (!print["spd_mag"].isNull())
-    pr.spdMag = print["spd_mag"] | 100;
+    t.spdMag = print["spd_mag"] | 100;
   else if (!print["spdMag"].isNull())
-    pr.spdMag = print["spdMag"] | 100;
+    t.spdMag = print["spdMag"] | 100;
 
   // 无真实状态数据前不置 online：避免重启后 MQTT 一连上就把默认
   // "prepare" 当成真实状态显示成 PREP
-  if (printerStatusReceived &&
-      !hasToken(pr.status, "offline") && !hasToken(pr.status, "disconnect")) {
-    pr.online = true;
+  if (t.statusReceived &&
+      !hasToken(t.status, "offline") && !hasToken(t.status, "disconnect")) {
+    t.online = true;
   } else {
-    pr.online = false;
+    t.online = false;
   }
   displayDirty = true;
 }
@@ -3137,7 +3311,7 @@ const char *jsonObjectEnd(const char *start, const char *end) {
   return nullptr;
 }
 
-void applyExtruderFromRawPayload(uint8_t *payload, size_t length) {
+void applyExtruderFromRawPayload(uint8_t *payload, size_t length, PrinterState &t){
   const char *data = (const char *)payload;
   const char *payloadEnd = data + length;
   const char *extPos = findPattern(data, length, "\"extruder\":");
@@ -3157,7 +3331,7 @@ void applyExtruderFromRawPayload(uint8_t *payload, size_t length) {
   extDoc.clear();
   if (deserializeJson(extDoc, objStart, (size_t)(objEnd - objStart)))
     return;
-  if (applyNozzleInfo(extDoc["info"].as<JsonArray>()))
+  if (applyNozzleInfo(extDoc["info"].as<JsonArray>(), t))
     displayDirty = true;
 }
 
@@ -3286,7 +3460,7 @@ void initMqttFilter() {
   mqttFilterInitialized = true;
 }
 
-void parseMqttPayload(uint8_t *payload, size_t length) {
+void parseMqttPayload(uint8_t *payload, size_t length, PrinterState &t){
   initMqttFilter();
   static JsonDocument doc;
   doc.clear();
@@ -3309,8 +3483,68 @@ void parseMqttPayload(uint8_t *payload, size_t length) {
     Serial.printf("[MQTT] Cloud returned failure: %s\n", res);
   }
 
-  applyPrint(doc["print"].as<JsonObject>());
-  applyExtruderFromRawPayload(payload, length);
+  applyPrint(doc["print"].as<JsonObject>(), t);
+  applyExtruderFromRawPayload(payload, length, t);
+  // 让全局"已收到状态/最后活跃"始终反映当前显示的那台
+  printerStatusReceived = pr.statusReceived;
+  lastPrinterActivity = pr.lastActivity;
+}
+
+// topic 形如 device/<serial>/report；不构造 String，直接按字节比对省内存
+bool mqttTopicMatches(const uint8_t *topic, size_t topicLen,
+                      const String &serial) {
+  const size_t prefixLen = 7; // "device/"
+  const size_t suffixLen = 7; // "/report"
+  if (!serial.length())
+    return false;
+  if (topicLen != prefixLen + serial.length() + suffixLen)
+    return false;
+  if (memcmp(topic, "device/", prefixLen) != 0)
+    return false;
+  if (memcmp(topic + prefixLen, serial.c_str(), serial.length()) != 0)
+    return false;
+  return memcmp(topic + prefixLen + serial.length(), "/report", suffixLen) == 0;
+}
+
+void mqttDispatchPublish(uint8_t header, size_t len) {
+  if (len <= 2)
+    return;
+  uint8_t qos = (header >> 1) & 0x03;
+  uint16_t topicLen = ((uint16_t)mqttBuf[0] << 8) | mqttBuf[1];
+  size_t headerOffset = 2 + topicLen;
+  if (qos > 0 && headerOffset + 2 <= len) {
+    uint16_t packetId =
+        ((uint16_t)mqttBuf[headerOffset] << 8) | mqttBuf[headerOffset + 1];
+    if (qos == 1)
+      mqttSendPuback(packetId);
+    headerOffset += 2;
+  }
+  if (headerOffset >= len)
+    return;
+  // 按 topic 把数据投递到对应打印机：pr 是当前显示的那台，prAlt 是另一台。
+  // 注意 mqttBuf 前两个字节是 topic 长度，topic 本体从 mqttBuf+2 开始。
+  const uint8_t *topic = mqttBuf + 2;
+  PrinterState *target = &pr;
+  if (mqttTopicMatches(topic, topicLen, pr.serial)) {
+    target = &pr;
+  } else if (mqttTopicMatches(topic, topicLen, prAlt.serial)) {
+    target = &prAlt;
+  } else if (mqttTopicMatches(topic, topicLen, stored.serial)) {
+    target = &pr;
+  }
+  parseMqttPayload(mqttBuf + headerOffset, len - headerOffset, *target);
+
+  // 调试：打印前 40 条 PUBLISH 的 topic 与路由结果（排查双订阅是否都收到数据）
+  static uint8_t pubLogCount = 0;
+  if (pubLogCount < 40) {
+    char shown[72];
+    size_t n = topicLen < 48 ? topicLen : 48;
+    memcpy(shown, topic, n);
+    shown[n] = 0;
+    Serial.printf("[PUB] %s len=%u -> %s\n", shown, (unsigned)len,
+                  target == &prAlt ? "alt" : "main");
+    pubLogCount++;
+  }
 }
 
 void mqttHandleIncoming() {
@@ -3326,20 +3560,7 @@ void mqttHandleIncoming() {
     uint8_t type = header >> 4;
     if (type == 3 && len > 2) {
       lastMqttDataReceived = millis();
-      uint8_t qos = (header >> 1) & 0x03;
-      uint16_t topicLen = ((uint16_t)mqttBuf[0] << 8) | mqttBuf[1];
-      size_t headerOffset = 2 + topicLen;
-      if (qos > 0 && headerOffset + 2 <= len) {
-        uint16_t packetId = ((uint16_t)mqttBuf[headerOffset] << 8) |
-                            mqttBuf[headerOffset + 1];
-        if (qos == 1) {
-          mqttSendPuback(packetId);
-        }
-        headerOffset += 2;
-      }
-      if (headerOffset < len) {
-        parseMqttPayload(mqttBuf + headerOffset, len - headerOffset);
-      }
+      mqttDispatchPublish(header, len);
     } else if (type == 13) {
       lastMqttDataReceived = millis();
     } else if (type == 14) {
@@ -3376,7 +3597,7 @@ bool connectMqtt() {
     return false;
   }
 
-  String topic = reportTopic();
+  String topic = reportTopicFor(stored.serial);
   if (!mqttSendSubscribe(topic)) {
     if (lastMqttError.length() == 0)
       lastMqttError = "Subscribe failed";
@@ -3385,20 +3606,50 @@ bool connectMqtt() {
     return false;
   }
 
+  // 轮换模式：同一条连接上再订阅第二台打印机（同账号同 token，topic 各自独立）
+  bool partnerSubscribed = false;
+  if (stored.rotateSec > 0 && rotatePartnerSerial.length() &&
+      rotatePartnerSerial != stored.serial) {
+    String partnerTopic = reportTopicFor(rotatePartnerSerial);
+    if (mqttSendSubscribe(partnerTopic)) {
+      partnerSubscribed = true;
+      Serial.print("Cloud MQTT partner subscribed: ");
+      Serial.println(partnerTopic);
+    } else {
+      lastMqttError = "Partner subscribe failed";
+      Serial.println("Cloud MQTT partner subscribe failed");
+    }
+  }
+
   lastMqttError = "";
   lastMqttDataReceived = millis();
   mqttReconnectDelay = MQTT_RECONNECT_INTERVAL;
   // 从未收到过状态数据（刚重启/刚换打印机）时保持 offline，
   // 避免默认 "prepare" 在无真实数据时被显示成 PREP
-  pr.online = printerStatusReceived;
-  publishMqttRequest(
+  pr.online = pr.statusReceived;
+  publishMqttRequestTo(
+      stored.serial,
       "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}");
-  publishMqttRequest(
+  publishMqttRequestTo(
+      stored.serial,
       "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"start\"}}");
+  if (partnerSubscribed) {
+    prAlt.online = prAlt.statusReceived;
+    publishMqttRequestTo(
+        rotatePartnerSerial,
+        "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}");
+    publishMqttRequestTo(
+        rotatePartnerSerial,
+        "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"start\"}}");
+  }
   static String lastSubscribedSerial = "";
-  if (lastSubscribedSerial != stored.serial) {
-    lastSubscribedSerial = stored.serial;
-    resetLivePrintFields();
+  String subscribeKey =
+      stored.serial + "|" + (partnerSubscribed ? rotatePartnerSerial : String(""));
+  if (lastSubscribedSerial != subscribeKey) {
+    lastSubscribedSerial = subscribeKey;
+    resetLivePrintFields(pr);
+    if (partnerSubscribed)
+      resetLivePrintFields(prAlt);
   }
   requestPrinterState();
   Serial.print("Cloud MQTT subscribed: ");
@@ -5251,6 +5502,7 @@ void setup() {
   delay(300);
   loadStoredConfig();
   loadPrinterOptions();
+  refreshRotatePartner();
 
   tft.begin();
   tft.invertDisplay(1);
@@ -5381,13 +5633,46 @@ void loop() {
   // 注意：必须用当前 millis() 计算——loop 顶部的 now 取自 mqttHandleIncoming
   // 之前，lastPrinterActivity 可能比 now 新，now - lastPrinterActivity 会无符号
   // 回绕成 ~42 亿，导致误判超时（每帧把 online 打回 False）
-  unsigned long activityAge = millis() - lastPrinterActivity;
-  if (pr.online && lastPrinterActivity > 0 &&
+  unsigned long activityAge = millis() - pr.lastActivity;
+  if (pr.online && pr.lastActivity > 0 &&
       activityAge >= MQTT_OFFLINE_TIMEOUT) {
     pr.online = false;
     displayDirty = true;
     Serial.printf("Printer silent for %lus, marking OFFLINE\n",
                   (unsigned long)(activityAge / 1000));
+  }
+  if (prAlt.online && prAlt.lastActivity > 0 &&
+      millis() - prAlt.lastActivity >= MQTT_OFFLINE_TIMEOUT) {
+    prAlt.online = false;
+  }
+
+  // 双打印机轮换：纯内存切换（不重连、不写 flash），到点把另一台的数据换到 pr
+  if (rotationEnabled()) {
+    if (lastRotateSwapMs == 0)
+      lastRotateSwapMs = now;
+    if (now - lastRotateSwapMs >= (unsigned long)stored.rotateSec * 1000UL) {
+      lastRotateSwapMs = now;
+      PrinterState tmp = pr;
+      pr = prAlt;
+      prAlt = tmp;
+      cache = RenderCache();
+      printerStatusReceived = pr.statusReceived;
+      displayDirty = true;
+      Serial.printf("[ROTATE] showing %s (%s)\n", pr.displayName.c_str(),
+                    pr.serial.c_str());
+    }
+  } else if (stored.serial.length() && pr.serial != stored.serial) {
+    // 轮换已关闭但显示还停在别的机器上：切回选定那台并重新等它的数据
+    lastRotateSwapMs = 0;
+    PrinterState fresh;
+    fresh.serial = stored.serial;
+    fresh.displayName = stored.name;
+    fresh.model = stored.model;
+    pr = fresh;
+    cache = RenderCache();
+    printerStatusReceived = false;
+    lastPrinterActivity = 0;
+    displayDirty = true;
   }
 
   // NTP time sync retry (every 60s if not synced)

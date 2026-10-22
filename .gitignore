@@ -56,3 +56,20 @@ desktop.ini
 compile_commands.json
 .clangd/
 .cache/
+
+# --- Local build environment (added by this fork, never upload) ---
+.platformio/
+.platformio-core/
+.venv/
+venv/
+.pio-venv/
+.tmp/
+out/
+dist/
+*.b64
+
+# --- Personal / device data (defensive duplicate of the rules above) ---
+**/data/config.json
+**/data/devices.json
+**/data/device-history.jsonl
+**/data/server-state.json
