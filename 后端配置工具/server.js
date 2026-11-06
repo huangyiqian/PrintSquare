@@ -5,10 +5,19 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 
-const BACKEND_VERSION = "backend-v0.5.40";
+const BACKEND_VERSION = "backend-v0.5.40-rot";
 const CHANGELOG = [
   {
     version: BACKEND_VERSION,
+    changes: [
+      "新增「双机轮换」面板：选择轮换间隔（关闭 / 5 / 10 / 30 秒）和轮换搭档，一键写入 ESP",
+      "打印机列表按「主显示 → 轮换搭档 → 其他」的顺序同步到 ESP，保证轮换对就是页面上选的两台",
+      "轮换状态实时回显：当前显示哪台、搭档哪台、是否已开启；打印机表格新增「轮换角色」列",
+      "完整配置写入时一并下发 rotate_sec，重新刷固件后轮换设置会跟着恢复"
+    ]
+  },
+  {
+    version: "backend-v0.5.40",
     changes: [
       "固件新增打印机细分状态显示：解析 MQTT print.stg_cur，把「自动调平 / 热床预热 / 振动补偿 / 换料中 / 退料中 / 进料中 / 回零中 / 清洁喷嘴 / 喷嘴加热 / 挤出校准 / 电机校准 / 断料暂停 / 喷嘴裹料 / 喷嘴堵塞 / 已暂停 / 指令暂停」等动作显示到经典、信息面板、时钟三套布局的右上角",
       "英文缩写与中文简写（16x16 点阵字模）二选一，跟随 8081 页面中英文切换，写入设备并断电保存；未收录阶段自动回退到通用状态",
@@ -386,6 +395,7 @@ const DEFAULT_CONFIG = {
   cloud: { region: "cn", account: "", access_token: "", mqtt_username: "", token_expires_at: 0 },
   printer: { serial: "", access_code: "", display_name: "", model: "" },
   display: { brightness: 100, layout: "classic", rotation: 0, mirror: 0, alias: "", alias_bitmap_hex: "", alias_bitmap_w: 0, alias_bitmap_h: 0 },
+  rotation: { seconds: 0 },
   esp: { host: "", port: 8081, serial_port: "COM7", wifi_status: "unknown", last_ip: "", last_checked_at: 0, last_error: "" },
   defaults: { wifi: { ssid: "", password: "" } },
   active_esp_id: "default",
@@ -427,6 +437,12 @@ function normalizeRotation(value) {
 function normalizeMirror(value) {
   const mode = Number(value);
   return mode === 1 ? mode : 0;
+}
+
+function normalizeRotationSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return [5, 10, 30].includes(seconds) ? seconds : 0;
 }
 
 function normalizeAlias(value) {
@@ -744,6 +760,15 @@ function publicConfig() {
     esp: cfg.esp,
     active_esp_id: cfg.active_esp_id,
     active_esp_label: espLabel(cfg.esp_devices[cfg.active_esp_id]),
+    rotation: {
+      seconds: normalizeRotationSeconds(cfg.rotation && cfg.rotation.seconds),
+      selected: cfg.printer.serial || "",
+      printers: (readJson(DEVICES_FILE, { devices: [] }).devices || []).map((item) => ({
+        serial: item.serial,
+        name: item.display_name || item.serial,
+        model: item.model || ""
+      }))
+    },
     esp_profiles: profiles
   };
 }
@@ -1020,7 +1045,7 @@ function ensureActiveEspSelected(cfg = readConfig()) {
 }
 
 async function ensureSingleConnectedEsp() {
-  const ports = (await listSerialPortObjects()).map((item) => normalizeSerialPort(item.port)).filter(Boolean);
+  const ports = (await listSerialPortObjects().catch(() => [])).map((item) => normalizeSerialPort(item.port)).filter(Boolean);
   const uniquePorts = [...new Set(ports)];
   if (uniquePorts.length <= 1) return;
   const scanResults = await Promise.all(uniquePorts.map(async (port) => ({
@@ -1065,7 +1090,7 @@ async function syncPrinterListToEsp(devices, config) {
   let serialError = "USB 串口未连接";
   const serialPayload = { printers };
   if (Buffer.byteLength(JSON.stringify(serialPayload), "utf8") <= 1900) {
-    const ports = await listSerialPorts();
+    const ports = await listSerialPorts().catch(() => []);
     if (ports.includes(normalizeSerialPort(cfg.esp.serial_port))) {
       const serialResult = await pushConfigToSerial(cfg.esp.serial_port, serialPayload);
       if (serialResult.status) {
@@ -1703,6 +1728,7 @@ async function pushConfigToEsp(config, options = {}) {
     serial: cfg.printer.serial,
     name: cfg.printer.display_name || cfg.printer.serial,
     model: cfg.printer.model || "",
+    rotate_sec: normalizeRotationSeconds(cfg.rotation && cfg.rotation.seconds),
     brightness: normalizeBrightness(cfg.display.brightness),
     layout: normalizeLayout(cfg.display.layout),
     rotation: normalizeRotation(cfg.display.rotation),
@@ -1790,6 +1816,105 @@ async function configureWifiAndDetect(options = {}) {
     message: `${writeText}${detectText}`,
     write,
     detection
+  };
+}
+
+// ---------- 双机轮换：状态读取与写入 ----------
+async function readEspRotationStatus() {
+  const cfg = readConfig();
+  const esp = cfg.esp || {};
+  let status = null;
+  let source = "";
+  try {
+    const serial = await readEspStatusViaSerial(esp.serial_port);
+    if (serial && serial.ok && serial.status) {
+      status = serial.status;
+      source = "serial";
+    }
+  } catch (error) {
+    // 串口没插或没响应时继续走 HTTP
+  }
+  if (!status && esp.host) {
+    const result = await localRequestReliable(
+      `http://${esp.host}:${Number(esp.port || 8081)}/api/status`,
+      "GET",
+      null,
+      2000
+    );
+    if (result.status >= 200 && result.status < 300 && result.json && result.json.ok) {
+      status = result.json;
+      source = "http";
+    }
+  }
+  return {
+    ok: Boolean(status),
+    source,
+    rotation_seconds: normalizeRotationSeconds(status && status.rotate_sec),
+    rotate_active: status ? Number(status.rotate_active || 0) : 0,
+    display_serial: (status && status.display_serial) || "",
+    display_name: (status && status.name) || "",
+    partner: (status && status.rotate_partner) || "",
+    printer_count: status ? Number(status.printer_count || 0) : 0
+  };
+}
+
+async function applyRotationSetting(input = {}) {
+  const body = input && typeof input === "object" ? input : {};
+  const cfg = readConfig();
+  ensureActiveEspSelected(cfg);
+  const seconds = normalizeRotationSeconds(body.seconds);
+  const partner = String(body.partner_serial || "").trim();
+  const devices = readJson(DEVICES_FILE, { devices: [] }).devices || [];
+  const selectedSerial = String(cfg.printer.serial || "");
+  const ordered = [];
+  const pushDevice = (serial) => {
+    const device = devices.find((item) => item && item.serial === serial);
+    if (device && !ordered.some((item) => item.serial === device.serial)) ordered.push(device);
+  };
+  pushDevice(selectedSerial);
+  if (partner && partner !== selectedSerial) pushDevice(partner);
+  for (const device of devices) {
+    if (device && device.serial) pushDevice(device.serial);
+  }
+  if (seconds > 0 && ordered.length < 2) {
+    throw new Error("轮换需要至少 2 台已同步的打印机：请先刷新打印机列表，并把两台都同步到 ESP。");
+  }
+  const printerSync = await syncPrinterListToEsp(ordered, cfg).catch((error) => ({ ok: false, error: error.message }));
+  const payload = { rotate_sec: seconds };
+  let write = await pushConfigToSerial(cfg.esp.serial_port, payload).catch((error) => ({ status: 0, error: error.message }));
+  let transport = write && write.status ? "serial" : "";
+  if (!transport && cfg.esp.host) {
+    const httpResult = await localRequestReliable(espConfigUrl(payload, cfg), "GET", null, 2500);
+    if (httpResult.status >= 200 && httpResult.status < 300) {
+      write = httpResult;
+      transport = "http";
+    }
+  }
+  if (!transport) {
+    return {
+      ok: false,
+      message: "轮换设置写入失败：请确认 ESP 已插 USB，或电脑与 ESP 在同一局域网且 ESP 在线。",
+      printer_sync: printerSync,
+      serial_error: (write && write.error) || ""
+    };
+  }
+  cfg.rotation = { seconds };
+  saveConfig(cfg);
+  await new Promise((resolve) => setTimeout(resolve, transport === "serial" ? 2500 : 1200));
+  const status = await readEspRotationStatus().catch(() => ({ ok: false }));
+  const mainName = (ordered[0] && (ordered[0].display_name || ordered[0].serial)) || selectedSerial || "--";
+  const partnerName = (ordered[1] && (ordered[1].display_name || ordered[1].serial)) || "--";
+  return {
+    ok: true,
+    transport,
+    seconds,
+    partner: ordered.length > 1 ? ordered[1].serial : "",
+    printer_sync: printerSync,
+    status,
+    message:
+      seconds > 0
+        ? `轮换已开启：每 ${seconds} 秒在「${mainName}」和「${partnerName}」之间切换。`
+        : "轮换已关闭，屏幕固定显示当前主打印机。"
   };
 }
 
@@ -1932,6 +2057,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 <div class="actions secondary-actions"><button id="brightnessBtn" onclick="applyBrightnessSetting()">应用屏幕设置</button><button id="detectWifiBtn" class="secondary" onclick="checkEsp(true)">检测 ESP WiFi</button><button id="saveSettingsBtn" onclick="saveEsp(false)">只保存写入设置</button></div>
 <div class="statusbox"><p id="wifiLine" class="muted"></p><p id="adminLine" class="muted"></p><p id="adminHint" class="muted adminhint" hidden></p><p id="brightnessLine" class="muted"></p><p id="espLine" class="muted"></p></div></section>
 <section><h2>3. 打印机列表</h2><button id="loadDevicesBtn" onclick="loadDevices()">刷新打印机列表</button><p class="muted">选择一台打印机后，后端会把云 MQTT 配置写入当前 USB 连接的 ESP。</p><div id="devices"></div></section>
+<section><h2>4. 双机轮换</h2><p class="muted">开启后屏幕会定时在「主显示」和「轮换搭档」之间切换（同一条 MQTT 连接，不重连、不丢数据）。两台要在同一账号下，且都已同步到 ESP。</p>
+<div class="formgrid"><div><label>轮换间隔</label><select id="rotateSeconds" onchange="markRotationDirty()"><option value="0">关闭</option><option value="5">5 秒</option><option value="10">10 秒</option><option value="30">30 秒</option></select></div><div><label>轮换搭档</label><select id="rotatePartner" onchange="markRotationDirty()"><option value="">自动（同步列表里的第一台其它打印机）</option></select></div></div>
+<div class="actions primary"><button id="rotationBtn" onclick="applyRotation()">应用轮换设置</button><button class="secondary" onclick="refreshRotation(true)">刷新轮换状态</button></div>
+<p id="rotationLine" class="muted">正在读取轮换状态…</p></section>
 <section><h2>当前配置</h2><div id="statusLine"></div><pre id="log"></pre></section></div>
 </main><script>
 const BOOT_URLS=${JSON.stringify(urls)};
@@ -1989,6 +2118,7 @@ const I18N={
 "当前同时连接了多台 ESP，请只保留当前要配置的一台。":"Multiple ESP devices are connected. Keep only the one you are configuring.",
 "请先连接一台 ESP，并点击“检测当前 ESP”。":"Connect one ESP first, then click “Detect current ESP”.",
 "请先完成第 1 步登录和第 2 步 WiFi 保存，再选择打印机。":"Finish step 1 (login) and step 2 (WiFi) before selecting a printer.",
+"4. 双机轮换":"4. Dual-printer rotation","轮换间隔":"Rotation interval","关闭":"Off","5 秒":"5 s","10 秒":"10 s","30 秒":"30 s","轮换搭档":"Rotation partner","自动（同步列表里的第一台其它打印机）":"Auto (first other synced printer)","应用轮换设置":"Apply rotation setting","刷新轮换状态":"Refresh rotation status","轮换角色":"Rotation role","主显示":"Primary","搭档":"Partner","正在读取轮换状态…":"Reading rotation state…","轮换设置有改动，点「应用轮换设置」写入 ESP。":"Rotation settings changed; click “Apply rotation setting” to write them.","正在写入轮换设置…":"Writing rotation settings…","还没读到 ESP 轮换状态：请插上 USB 或确认 ESP 在线后点「刷新轮换状态」。":"No rotation state yet: connect USB or make sure the ESP is online, then refresh.","轮换设置已写入 ESP。":"Rotation settings written to the ESP.","轮换设置写入失败。":"Failed to write rotation settings.","开启后屏幕会定时在「主显示」和「轮换搭档」之间切换（同一条 MQTT 连接，不重连、不丢数据）。两台要在同一账号下，且都已同步到 ESP。":"When enabled the screen alternates between the primary printer and the partner on the same MQTT connection (no reconnect, no data loss). Both printers must be synced to the ESP under the same account.","轮换已开启：每 {n} 秒在「{main}」和「{partner}」之间切换；当前显示「{now}」。":"Rotation on: switching every {n}s between “{main}” and “{partner}”; now showing “{now}”.","轮换已关闭：固定显示「{main}」。":"Rotation off: fixed on “{main}”.","轮换已开启：每 {n} 秒在「{main}」和「{partner}」之间切换。":"Rotation on: switching every {n}s between “{main}” and “{partner}”.","轮换已关闭，屏幕固定显示当前主打印机。":"Rotation off: the screen stays on the primary printer.",
 "名称":"Name","型号":"Model","序列号":"Serial","状态":"Status","显示这台并同步":"Show this one and sync",
 "请填写 WiFi 名称和密码":"Please enter the WiFi name and password.","未选择 ESP":"No ESP selected",
 "未知网络错误":"Unknown network error","Bambu 云服务没有返回结果":"Bambu Cloud returned no result",
@@ -2067,7 +2197,27 @@ function setStep(id,done,active){const el=$(id);if(!el)return;el.className="step
 function wifiStatusText(c){if(c.esp.wifi_status==="configured")return t("WiFi 已配置")+(c.esp.last_ip?tp("（IP：{ip}）",{ip:c.esp.last_ip}):"");if(c.esp.wifi_status==="ap_only")return t("ESP 已响应，但还没有连上 WiFi");if(c.esp.last_error)return t("WiFi 状态未确认：")+c.esp.last_error;return t("WiFi 状态未检测");}
 function updateSteps(c){setStep("stepCloud",c.steps.cloud_ready,!c.steps.cloud_ready);setStep("stepWifi",c.steps.esp_wifi_configured,c.steps.cloud_ready&&!c.steps.esp_wifi_configured);setStep("stepPrinter",c.steps.printer_selected,c.steps.cloud_ready&&c.steps.esp_ready&&c.steps.wifi_saved&&!c.steps.printer_selected);const btn=$("loadDevicesBtn");if(btn)btn.disabled=!c.steps.cloud_ready;}
 function renderEspProfiles(c){const list=$("espProfileList");if(!list)return;const profiles=c.esp_profiles||[];list.innerHTML=(profiles.length?profiles:[{id:"",label:t("暂无设备档案")}]).map(p=>"<option value='"+esc(p.id)+"'"+(p.id===c.active_esp_id?" selected":"")+">"+esc(p.label||p.id)+"</option>").join("");$("activeEspLine").textContent=": "+(c.active_esp_label||c.active_esp_id||t("未读取"))+tp("（当前串口 {port}）",{port:(c.esp.serial_port||"--")});}
-async function refresh(){const c=await api("/api/config");if(document.activeElement!==$("region"))$("region").value=c.cloud.region;setIdleValue("account",c.cloud.account);if(![$("wifiSsid"),$("wifiPassword"),$("wifiList")].includes(document.activeElement))setIdleValue("wifiSsid",c.wifi.ssid);$("wifiPassword").placeholder=c.wifi.password_saved?"已保存，留空则不修改":"WiFi 密码";setIdleValue("espHost",c.esp.host||c.esp.last_ip);if(document.activeElement!==$("espPort"))$("espPort").value=c.esp.port||8081;if(![$("brightness"),$("brightnessValue")].includes(document.activeElement))syncBrightnessValue(c.display&&c.display.brightness!==undefined?c.display.brightness:100);if(document.activeElement!==$("layout"))$("layout").value=(c.display&&c.display.layout)||"classic";if(document.activeElement!==$("rotation"))$("rotation").value=String((c.display&&c.display.rotation)||0);if(document.activeElement!==$("mirror"))$("mirror").value=String((c.display&&c.display.mirror)||0);setIdleValue("alias","");if(![$("serialPort"),$("serialList")].includes(document.activeElement))$("serialPort").value=c.esp.serial_port||"COM7";renderEspProfiles(c);updateSteps(c);setActionState(c);$("statusLine").innerHTML=tp("当前 ESP：{esp}　打印机：{printer}　云账号：{cloud}　MQTT 用户名：{mqtt}",{esp:c.active_esp_label||c.active_esp_id||"--",printer:c.printer.display_name||c.printer.serial||t("未选择"),cloud:c.cloud.logged_in?t("已登录"):t("未登录"),mqtt:c.cloud.mqtt_username||"--"});$("brightnessLine").textContent=tp("布局：{layout}　亮度：{brightness}%　旋转：{rotation}°　镜像：{mirror}",{layout:t(((c.display&&c.display.layout)==="dashboard")?"信息面板":"经典"),brightness:(c.display&&c.display.brightness!==undefined?c.display.brightness:100),rotation:((c.display&&c.display.rotation)||0),mirror:t(["无","左右"][Number((c.display&&c.display.mirror)||0)]||"无")});$("espLine").textContent=tp("当前写入方式：USB 串口优先，HTTP 兜底（{port}）",{port:($("serialPort").value||"--")});$("wifiLine").className=c.esp.wifi_status==="configured"?"ok":(c.esp.wifi_status==="ap_only"?"warn":"muted");$("wifiLine").textContent=wifiStatusText(c);log(c)}
+let rotationState=null;
+function rotationRole(serial){if(!rotationState||!rotationState.ok)return"";var s=String(serial||"");if(s&&s===String(rotationState.display_serial||""))return t("主显示");if(s&&s===String(rotationState.partner||""))return t("搭档");return"";}
+function markRotationDirty(){var l=$("rotationLine");if(l){l.className="warn";l.textContent=t("轮换设置有改动，点「应用轮换设置」写入 ESP。");}}
+function renderRotation(d,c){
+  var line=$("rotationLine");var partnerSel=$("rotatePartner");
+  var devices=(c&&c.rotation&&c.rotation.printers)||[];
+  var selected=(c&&c.rotation&&c.rotation.selected)||"";
+  if(partnerSel){var cur=partnerSel.value;var opts=['<option value="">'+esc(t("自动（同步列表里的第一台其它打印机）"))+'</option>'];devices.filter(function(x){return x.serial&&x.serial!==selected;}).forEach(function(x){opts.push('<option value="'+esc(x.serial)+'"'+(x.serial===cur?" selected":"")+'>'+esc((x.name||x.serial)+" · "+(x.model||""))+'</option>');});partnerSel.innerHTML=opts.join("");}
+  var sec=Number((d&&d.rotation_seconds)||0);var secSel=$("rotateSeconds");if(secSel&&document.activeElement!==secSel)secSel.value=String(sec);
+  if(!line)return;
+  if(!d||!d.ok){line.className="warn";line.textContent=t("还没读到 ESP 轮换状态：请插上 USB 或确认 ESP 在线后点「刷新轮换状态」。");return;}
+  var nameOf=function(serial){var f=devices.filter(function(x){return x.serial===serial;})[0];return f?(f.name||serial):(serial||"--");};
+  var mainName=nameOf(d.display_serial||selected);var partnerName=d.partner?nameOf(d.partner):"--";
+  if(sec>0){line.className="ok";line.textContent=tp("轮换已开启：每 {n} 秒在「{main}」和「{partner}」之间切换；当前显示「{now}」。",{n:sec,main:nameOf(selected||d.display_serial),partner:partnerName,now:nameOf(d.display_serial)});}
+  else{line.className="muted";line.textContent=tp("轮换已关闭：固定显示「{main}」。",{main:mainName});}
+}
+async function refreshRotation(showLog){try{var d=await api("/api/esp/rotation");rotationState=d;var c=await api("/api/config");renderRotation(d,c);var tbody=document.querySelectorAll("#devices table tr");if(tbody.length>1)renderDevicesFromCache();if(showLog)log(d);}catch(e){if(showLog)log(e);}}
+var lastDevices=null;
+function renderDevicesFromCache(){if(lastDevices)renderDevices(lastDevices);}
+async function applyRotation(){var busy=["rotationBtn"];var line=$("rotationLine");try{setBusy(busy,true);if(line){line.className="muted";line.textContent=t("正在写入轮换设置…");}var d=await api("/api/esp/rotation",{method:"POST",body:JSON.stringify({seconds:Number($("rotateSeconds").value||0),partner_serial:$("rotatePartner").value||""})});log(d);if(line){line.className=d.ok?"ok":"bad";line.textContent=sv(d.message)||(d.ok?t("轮换设置已写入 ESP。"):t("轮换设置写入失败。"));}await refresh();await refreshRotation(false);}catch(e){if(line){line.className="bad";line.textContent=sv(e&&e.error)||t("轮换设置写入失败。");}log(e)}finally{setBusy(busy,false);}}
+async function refresh(){const c=await api("/api/config");if(document.activeElement!==$("region"))$("region").value=c.cloud.region;setIdleValue("account",c.cloud.account);if(![$("wifiSsid"),$("wifiPassword"),$("wifiList")].includes(document.activeElement))setIdleValue("wifiSsid",c.wifi.ssid);$("wifiPassword").placeholder=c.wifi.password_saved?"已保存，留空则不修改":"WiFi 密码";setIdleValue("espHost",c.esp.host||c.esp.last_ip);if(document.activeElement!==$("espPort"))$("espPort").value=c.esp.port||8081;if(![$("brightness"),$("brightnessValue")].includes(document.activeElement))syncBrightnessValue(c.display&&c.display.brightness!==undefined?c.display.brightness:100);if(document.activeElement!==$("layout"))$("layout").value=(c.display&&c.display.layout)||"classic";if(document.activeElement!==$("rotation"))$("rotation").value=String((c.display&&c.display.rotation)||0);if(document.activeElement!==$("mirror"))$("mirror").value=String((c.display&&c.display.mirror)||0);setIdleValue("alias","");if(![$("serialPort"),$("serialList")].includes(document.activeElement))$("serialPort").value=c.esp.serial_port||"COM7";renderEspProfiles(c);updateSteps(c);setActionState(c);$("statusLine").innerHTML=tp("当前 ESP：{esp}　打印机：{printer}　云账号：{cloud}　MQTT 用户名：{mqtt}",{esp:c.active_esp_label||c.active_esp_id||"--",printer:c.printer.display_name||c.printer.serial||t("未选择"),cloud:c.cloud.logged_in?t("已登录"):t("未登录"),mqtt:c.cloud.mqtt_username||"--"});$("brightnessLine").textContent=tp("布局：{layout}　亮度：{brightness}%　旋转：{rotation}°　镜像：{mirror}",{layout:t(((c.display&&c.display.layout)==="dashboard")?"信息面板":"经典"),brightness:(c.display&&c.display.brightness!==undefined?c.display.brightness:100),rotation:((c.display&&c.display.rotation)||0),mirror:t(["无","左右"][Number((c.display&&c.display.mirror)||0)]||"无")});$("espLine").textContent=tp("当前写入方式：USB 串口优先，HTTP 兜底（{port}）",{port:($("serialPort").value||"--")});$("wifiLine").className=c.esp.wifi_status==="configured"?"ok":(c.esp.wifi_status==="ap_only"?"warn":"muted");$("wifiLine").textContent=wifiStatusText(c);log(c);refreshRotation(false)}
 async function sendCode(){try{log(await api("/api/cloud/send-code",{method:"POST",body:JSON.stringify({region:$("region").value,account:$("account").value})}))}catch(e){log(e)}}
 async function login(){try{log(await api("/api/cloud/login",{method:"POST",body:JSON.stringify({region:$("region").value,account:$("account").value,code:$("code").value})}));await loadDevices()}catch(e){log(e)}}
 async function saveEsp(configureWifi){const busy=["saveSettingsBtn","configureWifiBtn","detectWifiBtn","pushConfigBtn","brightnessBtn"];const line=$("wifiLine");try{setBusy(busy,true);if(line){line.className="muted";line.textContent=configureWifi?t("正在写入 ESP WiFi，随后会检测 ESP 是否连上 WiFi..."):t("正在保存写入设置...");}const body={wifi_ssid:$("wifiSsid").value,wifi_password:$("wifiPassword").value,brightness:Number($("brightness").value||100),layout:$("layout").value,rotation:Number($("rotation").value||0),mirror:Number($("mirror").value||0),alias:$("alias").value,host:$("espHost").value,port:Number($("espPort").value||8081),serial_port:$("serialPort").value||"COM7",configure_wifi:Boolean(configureWifi)};log(configureWifi?t("正在写入 ESP WiFi，并检测连接状态..."):t("正在保存写入设置..."));const d=await api("/api/esp",{method:"POST",body:JSON.stringify(body)});log(d);$("wifiPassword").value="";await refresh();if(configureWifi&&line){line.className=d.ok&&(d.detection&&d.detection.ok)?"ok":(d.ok?"warn":"bad");line.textContent=sv(d.message)||t("ESP WiFi 配置流程已完成，请查看下方日志。");}}catch(e){if(line){line.className="bad";line.textContent=sv(e&&e.error)||t("保存或配置 ESP WiFi 失败。");}log(e)}finally{setBusy(busy,false);try{setActionState(await api("/api/config"))}catch{}}}
@@ -2086,7 +2236,7 @@ async function scanWifi(showLog){const line=$("wifiScanLine");if(line){line.clas
 async function loadPorts(detect){try{const d=await api("/api/serial/ports");const ports=d.ports||[];const items=d.items||ports;renderSerialPorts(items);if(ports.length){const cur=String($("serialPort").value||"").toUpperCase();if((!cur||!ports.includes(cur))&&document.activeElement!==$("serialList"))$("serialPort").value=ports[0];renderSerialPorts(items);}if(detect)await autoDetectEsp(false);else log(d)}catch(e){log(e)}}
 async function loadDevices(){try{const d=await api("/api/cloud/bindings");renderDevices(d.devices||[]);if(d.esp_printer_sync)log({message:t(d.esp_printer_sync.ok?"打印机列表已同步到 ESP":"打印机列表尚未同步到 ESP"),esp_printer_sync:d.esp_printer_sync});else log(d);await refresh()}catch(e){log(e)}}
 async function syncPrinterList(){try{const body={host:$("espHost").value,port:Number($("espPort").value||8081)};const d=await api("/api/esp/sync-printers",{method:"POST",body:JSON.stringify(body)});log(d);await refresh()}catch(e){log(e)}}
-async function renderDevices(devs){const c=await api("/api/config");const disabled=!c.steps.ready_to_select_printer||multiEspBlocked;let warn="";if(disabled)warn='<p class="warn">'+esc(multiEspBlocked?t("当前同时连接了多台 ESP，请只保留当前要配置的一台。"):(!c.steps.esp_ready?t("请先连接一台 ESP，并点击“检测当前 ESP”。"):t("请先完成第 1 步登录和第 2 步 WiFi 保存，再选择打印机。")))+'</p>';$("devices").innerHTML=warn+'<table><tr><th>'+esc(t("名称"))+'</th><th>'+esc(t("型号"))+'</th><th>'+esc(t("序列号"))+'</th><th>'+esc(t("状态"))+'</th><th></th></tr>'+devs.map(d=>'<tr><td>'+esc(d.display_name)+'</td><td>'+esc(d.model)+'</td><td>'+esc(d.serial)+'</td><td>'+esc(d.print_status||"")+'</td><td><button class="selectPrinterBtn" data-serial="'+esc(d.serial)+'" data-esp="'+esc(c.active_esp_id||'')+'" data-port="'+esc(c.esp.serial_port||'')+'" '+(disabled?'disabled':'')+'>'+esc(t("显示这台并同步"))+'</button></td></tr>').join("")+'</table>';document.querySelectorAll(".selectPrinterBtn").forEach(b=>{b.onclick=()=>selectPrinter(b.dataset.serial,b.dataset.esp,b.dataset.port);});}
+async function renderDevices(devs){lastDevices=devs||[];const c=await api("/api/config");const disabled=!c.steps.ready_to_select_printer||multiEspBlocked;let warn="";if(disabled)warn='<p class="warn">'+esc(multiEspBlocked?t("当前同时连接了多台 ESP，请只保留当前要配置的一台。"):(!c.steps.esp_ready?t("请先连接一台 ESP，并点击“检测当前 ESP”。"):t("请先完成第 1 步登录和第 2 步 WiFi 保存，再选择打印机。")))+'</p>';$("devices").innerHTML=warn+'<table><tr><th>'+esc(t("名称"))+'</th><th>'+esc(t("型号"))+'</th><th>'+esc(t("序列号"))+'</th><th>'+esc(t("状态"))+'</th><th>'+esc(t("轮换角色"))+'</th><th></th></tr>'+devs.map(d=>'<tr><td>'+esc(d.display_name)+'</td><td>'+esc(d.model)+'</td><td>'+esc(d.serial)+'</td><td>'+esc(d.print_status||"")+'</td><td>'+esc(rotationRole(d.serial))+'</td><td><button class="selectPrinterBtn" data-serial="'+esc(d.serial)+'" data-esp="'+esc(c.active_esp_id||'')+'" data-port="'+esc(c.esp.serial_port||'')+'" '+(disabled?'disabled':'')+'>'+esc(t("显示这台并同步"))+'</button></td></tr>').join("")+'</table>';document.querySelectorAll(".selectPrinterBtn").forEach(b=>{b.onclick=()=>selectPrinter(b.dataset.serial,b.dataset.esp,b.dataset.port);});}
 function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#39;"}[c]))}
 async function selectPrinter(serial,active_esp_id,serial_port){try{log(t("正在写入当前 ESP：")+(active_esp_id||"--")+" / "+(serial_port||"--"));log(await api("/api/printer/select",{method:"POST",body:JSON.stringify({serial,active_esp_id,serial_port})}));await refresh()}catch(e){log(e)}}
 async function initialize(){renderChrome();applyDom();await refresh();await loadPorts(true);autoDetectEsp(false);await scanWifi(false);api("/api/devices").then(d=>renderDevices(d.devices||[]))}initialize();setInterval(refresh,5000);setInterval(()=>{if(document.visibilityState==="visible")autoDetectEsp(false)},8000);
@@ -2204,6 +2354,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, esp: saved.esp, display: saved.display });
     }
     if (req.method === "GET" && url.pathname === "/api/esp/status") return send(res, 200, await checkEspStatus({ discover: url.searchParams.get("discover") === "1" }));
+    if (req.method === "GET" && url.pathname === "/api/esp/rotation") return send(res, 200, await readEspRotationStatus());
+    if (req.method === "POST" && url.pathname === "/api/esp/rotation") return send(res, 200, await applyRotationSetting(await readBody(req)));
     if (req.method === "POST" && url.pathname === "/api/esp/push-config") return send(res, 200, await pushConfigToEsp());
     send(res, 404, { error: "没有这个接口" });
   } catch (error) {

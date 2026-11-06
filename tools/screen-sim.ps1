@@ -16,7 +16,7 @@
   局限（诚实声明）：它是"按状态重画"，**不能复现渲染类 bug**（例如某处绘制被后一个函数覆盖、
   字宽溢出等实机才会出现的问题）——那种情况仍需实机拍照。定位是替代"日常看屏幕状态"的拍照。
 
-.PARAMETER Url      设备地址，默认 http://192.168.1.100:8081
+.PARAMETER Url      设备地址，默认 http://127.0.0.1:8081
 .PARAMETER Json     改为读本地 /api/status 快照（离线可用）
 .PARAMETER Layout   auto=跟随设备 / all=三套都出 / classic|dashboard|clock
 .PARAMETER Scale    放大倍数 1..8，默认 3（输出 720x720）
@@ -34,7 +34,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Url = 'http://192.168.1.100:8081',
+    [string]$Url = 'http://127.0.0.1:8081',
     [string]$Json = '',
     [ValidateSet('auto','all','classic','dashboard','clock')]
     [string]$Layout = 'auto',
